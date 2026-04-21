@@ -5,5 +5,11 @@ services:
       MYSQL_ROOT_PASSWORD: test
       MYSQL_DATABASE: guide_plan
     ports:
-      - '3306:3306'
+      - '3307:3306'
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1', '-ptest']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s

@@ -1,3 +1,4 @@
+import 'dotenv/config'
 import mysql from 'mysql2/promise'
 import { loadDbConfig } from '../src/config.js'
 

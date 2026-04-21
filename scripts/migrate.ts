@@ -1,3 +1,4 @@
+import 'dotenv/config'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
