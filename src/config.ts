@@ -33,6 +33,9 @@ export function loadDbConfig(): DbConfig {
 }
 
 export function loadConfig(): AppConfig {
+  if (!process.env.OPENAI_API_KEY && process.env.API_KEY) {
+    process.env.OPENAI_API_KEY = process.env.API_KEY
+  }
   const parsed = envSchema.safeParse(process.env)
   if (!parsed.success) {
     throw new Error(`Invalid env: ${JSON.stringify(parsed.error.flatten().fieldErrors)}`)

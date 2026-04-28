@@ -1,4 +1,6 @@
-import 'dotenv/config'
+import { config } from 'dotenv'
+config()
+config({ path: '.env.local', override: true })
 import { loadConfig } from '../src/config.js'
 import { createPool } from '../src/db/pool.js'
 import { truncateRagChunks, insertRagChunk } from '../src/db/ragRepo.js'

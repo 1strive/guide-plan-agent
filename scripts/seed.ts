@@ -1,4 +1,6 @@
-import 'dotenv/config'
+import { config } from 'dotenv'
+config()
+config({ path: '.env.local', override: true })
 import mysql from 'mysql2/promise'
 import { loadDbConfig } from '../src/config.js'
 

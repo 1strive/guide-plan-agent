@@ -1,4 +1,6 @@
-import 'dotenv/config'
+import { config } from 'dotenv'
+config()
+config({ path: '.env.local', override: true })
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import { randomUUID } from 'node:crypto'
