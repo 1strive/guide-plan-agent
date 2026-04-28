@@ -2,16 +2,35 @@ import 'dotenv/config'
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import { randomUUID } from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
+import pino from 'pino'
 import { loadConfig } from './config.js'
 import { createPool } from './db/pool.js'
 import { createSession, insertMessage, listRecentMessages, sessionExists } from './db/chatRepo.js'
 import { SYSTEM_PROMPT } from './agent/prompts.js'
 import { runAgentWithTools, type ChatMessage } from './agent/llm.js'
 
+function createLogger() {
+  const logsDir = path.resolve('logs')
+  if (!fs.existsSync(logsDir)) {
+    fs.mkdirSync(logsDir, { recursive: true })
+  }
+  const logFile = path.join(logsDir, 'app.log')
+  const fileStream = fs.createWriteStream(logFile, { flags: 'a' })
+  return pino(
+    { level: 'info' },
+    pino.multistream([
+      { stream: process.stdout },
+      { stream: fileStream }
+    ])
+  )
+}
+
 async function main() {
   const config = loadConfig()
   const pool = createPool(config)
-  const app = Fastify({ logger: true })
+  const app = Fastify({ logger: createLogger() })
 
   await app.register(cors, { origin: true })
 

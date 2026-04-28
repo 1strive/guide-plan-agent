@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Guide-Plan-Agent 测试页面</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: #f5f5f5;
+        padding: 20px;
+        max-width: 800px;
+        margin: 0 auto;
+      }
+      h1 {
+        font-size: 20px;
+        margin-bottom: 16px;
+        color: #333;
+      }
+      h2 {
+        font-size: 16px;
+        margin: 20px 0 10px;
+        color: #555;
+        border-bottom: 1px solid #ddd;
+        padding-bottom: 6px;
+      }
+      .section {
+        background: #fff;
+        border-radius: 8px;
+        padding: 16px;
+        margin-bottom: 12px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 10px;
+        flex-wrap: wrap;
+      }
+      label {
+        font-size: 13px;
+        color: #666;
+        min-width: 80px;
+      }
+      input[type="text"],
+      input[type="url"] {
+        flex: 1;
+        padding: 8px 10px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        font-size: 14px;
+        min-width: 200px;
+      }
+      button {
+        padding: 8px 16px;
+        border: none;
+        border-radius: 6px;
+        background: #1677ff;
+        color: #fff;
+        font-size: 14px;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #4096ff;
+      }
+      button:disabled {
+        background: #bbb;
+        cursor: not-allowed;
+      }
+      button.secondary {
+        background: #52c41a;
+      }
+      button.secondary:hover {
+        background: #73d13d;
+      }
+      button.danger {
+        background: #ff4d4f;
+      }
+      button.danger:hover {
+        background: #ff7875;
+      }
+      .result {
+        background: #f6ffed;
+        border: 1px solid #b7eb8f;
+        border-radius: 6px;
+        padding: 10px;
+        margin-top: 10px;
+        font-size: 13px;
+        white-space: pre-wrap;
+        word-break: break-all;
+        display: none;
+      }
+      .result.error {
+        background: #fff2f0;
+        border-color: #ffccc7;
+      }
+      .chat-box {
+        border: 1px solid #e8e8e8;
+        border-radius: 6px;
+        height: 300px;
+        overflow-y: auto;
+        padding: 12px;
+        margin-bottom: 10px;
+        background: #fafafa;
+      }
+      .message {
+        margin-bottom: 10px;
+        max-width: 80%;
+        padding: 10px 14px;
+        border-radius: 12px;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      .message.user {
+        background: #1677ff;
+        color: #fff;
+        margin-left: auto;
+        border-bottom-right-radius: 4px;
+      }
+      .message.assistant {
+        background: #fff;
+        border: 1px solid #e8e8e8;
+        margin-right: auto;
+        border-bottom-left-radius: 4px;
+      }
+      .message .meta {
+        font-size: 11px;
+        opacity: 0.7;
+        margin-bottom: 4px;
+      }
+      .loading {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        border: 2px solid #1677ff;
+        border-top-color: transparent;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+        vertical-align: middle;
+        margin-left: 8px;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .tag {
+        display: inline-block;
+        padding: 2px 8px;
+        background: #e6f4ff;
+        color: #1677ff;
+        border-radius: 4px;
+        font-size: 12px;
+        margin-left: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Guide-Plan-Agent 测试页面</h1>
+
+    <div class="section">
+      <div class="row">
+        <label>API 地址</label>
+        <input
+          type="url"
+          id="baseUrl"
+          value="http://localhost:3001"
+          placeholder="http://localhost:3001"
+        />
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>1. 健康检查</h2>
+      <div class="row">
+        <button onclick="checkHealth()">检查服务状态</button>
+        <span id="healthLoading"></span>
+      </div>
+      <div class="result" id="healthResult"></div>
+    </div>
+
+    <div class="section">
+      <h2>2. 会话管理</h2>
+      <div class="row">
+        <button class="secondary" onclick="createSession()">创建新会话</button>
+        <span id="sessionTag" class="tag" style="display: none"></span>
+        <span id="sessionLoading"></span>
+      </div>
+      <div class="result" id="sessionResult"></div>
+    </div>
+
+    <div class="section">
+      <h2>3. 聊天测试</h2>
+      <div class="chat-box" id="chatBox">
+        <div
+          style="
+            color: #999;
+            text-align: center;
+            padding-top: 100px;
+            font-size: 13px;
+          "
+        >
+          请先创建会话，然后开始聊天
+        </div>
+      </div>
+      <div class="row">
+        <input
+          type="text"
+          id="messageInput"
+          placeholder="输入消息..."
+          disabled
+          style="flex: 1"
+        />
+        <button onclick="sendMessage()" id="sendBtn" disabled>发送</button>
+      </div>
+      <div class="result" id="chatResult"></div>
+    </div>
+
+    <script>
+      const baseUrl = () =>
+        document.getElementById("baseUrl").value.replace(/\/$/, "");
+      let sessionId = null;
+
+      function showResult(id, text, isError = false) {
+        const el = document.getElementById(id);
+        el.textContent = text;
+        el.className = "result" + (isError ? " error" : "");
+        el.style.display = "block";
+      }
+
+      function setLoading(id, show) {
+        document.getElementById(id).innerHTML = show
+          ? '<span class="loading"></span>'
+          : "";
+      }
+
+      async function checkHealth() {
+        setLoading("healthLoading", true);
+        try {
+          const res = await fetch(baseUrl() + "/health");
+          const data = await res.json();
+          showResult(
+            "healthResult",
+            `状态码: ${res.status}\n响应: ${JSON.stringify(data, null, 2)}`,
+            !data.ok,
+          );
+        } catch (e) {
+          showResult("healthResult", `请求失败: ${e.message}`, true);
+        }
+        setLoading("healthLoading", false);
+      }
+
+      async function createSession() {
+        setLoading("sessionLoading", true);
+        try {
+          const res = await fetch(baseUrl() + "/sessions", { method: "POST" });
+          const data = await res.json();
+          if (res.status === 201 && data.sessionId) {
+            sessionId = data.sessionId;
+            document.getElementById("sessionTag").textContent =
+              "会话: " + sessionId.slice(0, 8) + "...";
+            document.getElementById("sessionTag").style.display =
+              "inline-block";
+            document.getElementById("messageInput").disabled = false;
+            document.getElementById("sendBtn").disabled = false;
+            document.getElementById("chatBox").innerHTML = "";
+            showResult(
+              "sessionResult",
+              `创建成功\n响应: ${JSON.stringify(data, null, 2)}`,
+            );
+          } else {
+            showResult(
+              "sessionResult",
+              `异常响应\n状态码: ${res.status}\n响应: ${JSON.stringify(data, null, 2)}`,
+              true,
+            );
+          }
+        } catch (e) {
+          showResult("sessionResult", `请求失败: ${e.message}`, true);
+        }
+        setLoading("sessionLoading", false);
+      }
+
+      async function sendMessage() {
+        const input = document.getElementById("messageInput");
+        const text = input.value.trim();
+        if (!text || !sessionId) return;
+
+        input.value = "";
+        addMessage("user", text);
+        document.getElementById("sendBtn").disabled = true;
+        document.getElementById("sendBtn").textContent = "发送中...";
+
+        try {
+          const res = await fetch(baseUrl() + `/sessions/${sessionId}/chat`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: text }),
+          });
+          const data = await res.json();
+          if (res.status === 200) {
+            addMessage("assistant", data.reply);
+            showResult(
+              "chatResult",
+              `引用目的地: ${JSON.stringify(data.referencedDestinationIds || [])}`,
+            );
+          } else {
+            addMessage("assistant", `[错误] ${data.error || "未知错误"}`);
+            showResult(
+              "chatResult",
+              `请求失败\n状态码: ${res.status}\n响应: ${JSON.stringify(data, null, 2)}`,
+              true,
+            );
+          }
+        } catch (e) {
+          addMessage("assistant", `[异常] ${e.message}`);
+          showResult("chatResult", `请求失败: ${e.message}`, true);
+        }
+
+        document.getElementById("sendBtn").disabled = false;
+        document.getElementById("sendBtn").textContent = "发送";
+      }
+
+      function addMessage(role, content) {
+        const box = document.getElementById("chatBox");
+        if (
+          box.children.length === 1 &&
+          box.children[0].style.textAlign === "center"
+        ) {
+          box.innerHTML = "";
+        }
+        const div = document.createElement("div");
+        div.className = "message " + role;
+        div.innerHTML = `<div class="meta">${role === "user" ? "我" : "AI"}</div>${content}`;
+        box.appendChild(div);
+        box.scrollTop = box.scrollHeight;
+      }
+
+      document
+        .getElementById("messageInput")
+        .addEventListener("keydown", (e) => {
+          if (e.key === "Enter") sendMessage();
+        });
+    </script>
+  </body>
+</html>
