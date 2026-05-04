@@ -5,7 +5,7 @@ import {
   listFeaturesByDestination,
   searchDestinations
 } from '../db/destinationRepo.js'
-import { semanticSearchTravel } from '../db/ragRepo.js'
+
 
 export type ToolRunResult = {
   text: string
@@ -30,23 +30,7 @@ const definitions = [
       }
     }
   },
-  {
-    type: 'function' as const,
-    function: {
-      name: 'semantic_search_travel',
-      description:
-        '基于向量语义检索旅游知识片段，用于自然语言、长尾或难以用关键词命中的诉求。可选按地区预筛选。',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: '自然语言查询' },
-          top_k: { type: 'integer', description: '返回片段条数', default: 8 },
-          region: { type: 'string', description: '可选：地区/省份' }
-        },
-        required: ['query']
-      }
-    }
-  },
+
   {
     type: 'function' as const,
     function: {
@@ -70,10 +54,6 @@ export function getToolDefinitions() {
 
 type ToolArgs =
   | { name: 'search_destinations'; args: { query: string; region?: string; limit?: number } }
-  | {
-      name: 'semantic_search_travel'
-      args: { query: string; top_k?: number; region?: string }
-    }
   | { name: 'get_destination_detail'; args: { destination_id: number } }
 
 function parseArgs(name: string, raw: string): ToolArgs {
@@ -85,16 +65,6 @@ function parseArgs(name: string, raw: string): ToolArgs {
         query: String(j.query ?? ''),
         region: j.region != null ? String(j.region) : undefined,
         limit: j.limit != null ? Number(j.limit) : 10
-      }
-    }
-  }
-  if (name === 'semantic_search_travel') {
-    return {
-      name,
-      args: {
-        query: String(j.query ?? ''),
-        top_k: j.top_k != null ? Number(j.top_k) : undefined,
-        region: j.region != null ? String(j.region) : undefined
       }
     }
   }
@@ -134,26 +104,6 @@ export async function runTool(
           region: r.region,
           summary: r.summary,
           tags: r.tags
-        }))
-      }),
-      referencedDestinationIds: ids
-    }
-  }
-  if (parsed.name === 'semantic_search_travel') {
-    const hits = await semanticSearchTravel(pool, config, {
-      query: parsed.args.query,
-      top_k: parsed.args.top_k,
-      region: parsed.args.region
-    })
-    const ids = [...new Set(hits.map((h) => h.destination_id))]
-    return {
-      text: JSON.stringify({
-        hits: hits.map((h) => ({
-          score: h.score,
-          chunk_id: h.chunk_id,
-          destination_id: h.destination_id,
-          source: h.source,
-          chunk_text: h.chunk_text
         }))
       }),
       referencedDestinationIds: ids

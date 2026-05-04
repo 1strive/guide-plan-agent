@@ -9,7 +9,6 @@
     "dev": "tsx watch src/index.ts",
     "migrate": "tsx scripts/migrate.ts",
     "seed": "tsx scripts/seed.ts",
-    "rag:rebuild": "tsx scripts/rebuild-rag.ts",
     "docker:up": "docker compose up -d"
   },
   "engines": {

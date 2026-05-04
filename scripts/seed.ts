@@ -16,7 +16,6 @@ async function main() {
     connectionLimit: 2
   })
 
-  await pool.query('DELETE FROM rag_chunks')
   await pool.query('DELETE FROM destination_features')
   await pool.query('DELETE FROM destinations')
 

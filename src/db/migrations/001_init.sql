@@ -37,17 +37,4 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   KEY idx_messages_session_created (session_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS rag_chunks (
-  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  destination_id BIGINT UNSIGNED NOT NULL,
-  source VARCHAR(32) NOT NULL,
-  chunk_text TEXT NOT NULL,
-  embedding JSON NOT NULL,
-  content_hash CHAR(64) NOT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  CONSTRAINT fk_rag_destination FOREIGN KEY (destination_id) REFERENCES destinations (id) ON DELETE CASCADE,
-  UNIQUE KEY uq_rag_content_hash (content_hash),
-  KEY idx_rag_destination (destination_id),
-  KEY idx_rag_source (source)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+

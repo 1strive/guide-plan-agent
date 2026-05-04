@@ -13,11 +13,7 @@ const envSchema = dbEnvSchema.extend({
   OPENAI_BASE_URL: z.string().default('https://api.openai.com/v1'),
   OPENAI_API_KEY: z.string().min(1),
   OPENAI_MODEL: z.string().default('gpt-4o-mini'),
-  OPENAI_EMBEDDING_MODEL: z.string().default('text-embedding-3-small'),
-  EMBEDDING_BASE_URL: z.string().optional(),
   CHAT_HISTORY_LIMIT: z.coerce.number().default(30),
-  RAG_TOP_K_DEFAULT: z.coerce.number().default(8),
-  RAG_CANDIDATE_LIMIT: z.coerce.number().default(2000),
   LLM_MAX_TOOL_ROUNDS: z.coerce.number().default(10)
 })
 
@@ -43,6 +39,3 @@ export function loadConfig(): AppConfig {
   return parsed.data
 }
 
-export function embeddingBaseUrl(config: AppConfig): string {
-  return config.EMBEDDING_BASE_URL ?? config.OPENAI_BASE_URL
-}
