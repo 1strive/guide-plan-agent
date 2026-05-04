@@ -32,7 +32,7 @@ function createLogger() {
 async function main() {
   const config = loadConfig()
   const pool = createPool(config)
-  const app = Fastify({ logger: createLogger() })
+  const app = Fastify({ loggerInstance: createLogger() })
 
   await app.register(cors, { origin: true })
 
