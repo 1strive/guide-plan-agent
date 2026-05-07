@@ -39,6 +39,41 @@ export async function listRecentMessages(
   return list.reverse()
 }
 
+export type SessionRow = {
+  id: string
+  title: string | null
+  createdAt: string
+}
+
+export async function listSessions(pool: DbPool): Promise<SessionRow[]> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    'SELECT id, title, created_at AS createdAt FROM chat_sessions ORDER BY created_at DESC'
+  )
+  return rows as SessionRow[]
+}
+
+export async function getSessionMessages(
+  pool: DbPool,
+  sessionId: string
+): Promise<ChatMessageRow[]> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    'SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC, id ASC',
+    [sessionId]
+  )
+  return rows as ChatMessageRow[]
+}
+
+export async function updateSessionTitle(
+  pool: DbPool,
+  sessionId: string,
+  title: string
+): Promise<void> {
+  await pool.query(
+    'UPDATE chat_sessions SET title = ? WHERE id = ?',
+    [title, sessionId]
+  )
+}
+
 export async function insertMessage(
   pool: DbPool,
   sessionId: string,

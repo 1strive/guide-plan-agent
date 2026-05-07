@@ -9,7 +9,7 @@ import path from 'node:path'
 import pino from 'pino'
 import { loadConfig } from './config.js'
 import { createPool } from './db/pool.js'
-import { createSession, insertMessage, listRecentMessages, sessionExists } from './db/chatRepo.js'
+import { createSession, insertMessage, listRecentMessages, sessionExists, listSessions, getSessionMessages, updateSessionTitle } from './db/chatRepo.js'
 import { SYSTEM_PROMPT } from './agent/prompts.js'
 import { runAgentWithTools, type ChatMessage } from './agent/llm.js'
 
@@ -46,6 +46,24 @@ async function main() {
     }
   })
 
+  app.get('/sessions', async () => {
+    const sessions = await listSessions(pool)
+    return { sessions }
+  })
+
+  app.get<{ Params: { id: string } }>(
+    '/sessions/:id/messages',
+    async (req, reply) => {
+      const exists = await sessionExists(pool, req.params.id)
+      if (!exists) {
+        reply.status(404)
+        return { error: 'session not found' }
+      }
+      const messages = await getSessionMessages(pool, req.params.id)
+      return { messages }
+    }
+  )
+
   app.post('/sessions', async (_req, reply) => {
     const id = randomUUID()
     await createSession(pool, id)
@@ -80,6 +98,13 @@ async function main() {
 
       const result = await runAgentWithTools(pool, config, msgs)
       await insertMessage(pool, sessionId, 'assistant', result.content)
+
+      // auto-title: first user message → session title
+      const existing = await getSessionMessages(pool, sessionId)
+      if (existing.filter((m) => m.role === 'user').length === 1) {
+        const title = message.length > 30 ? message.slice(0, 30) + '…' : message
+        await updateSessionTitle(pool, sessionId, title)
+      }
 
       return {
         reply: result.content,
