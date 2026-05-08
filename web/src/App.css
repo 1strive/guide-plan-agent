@@ -181,6 +181,50 @@ body {
   font-style: italic;
 }
 
+/* ─── 工具调用标签 ─── */
+.tool-calls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.tool-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  background: #f0f2f5;
+  color: #666;
+  border: 1px solid #e0e0e0;
+}
+
+.tool-tag.running {
+  background: #fff7e6;
+  color: #d48806;
+  border-color: #ffd591;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.tool-tag.done {
+  background: #f6ffed;
+  color: #52c41a;
+  border-color: #b7eb8f;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
 .input-row {
   display: flex;
   gap: 8px;

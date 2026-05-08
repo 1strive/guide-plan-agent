@@ -14,7 +14,8 @@ const envSchema = dbEnvSchema.extend({
   OPENAI_API_KEY: z.string().min(1),
   OPENAI_MODEL: z.string().default('gpt-4o-mini'),
   CHAT_HISTORY_LIMIT: z.coerce.number().default(30),
-  LLM_MAX_TOOL_ROUNDS: z.coerce.number().default(10)
+  LLM_MAX_TOOL_ROUNDS: z.coerce.number().default(10),
+  LLM_TEMPERATURE: z.coerce.number().default(0.4)
 })
 
 export type AppConfig = z.infer<typeof envSchema>

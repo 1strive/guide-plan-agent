@@ -4,6 +4,7 @@ import * as api from "./api";
 type ChatMsg = {
   role: "user" | "assistant";
   content: string;
+  toolCalls?: Array<{ name: string; status: "running" | "done" }>;
 };
 
 export default function App() {
@@ -59,19 +60,85 @@ export default function App() {
     setMessages((prev) => [...prev, { role: "user", content: text }]);
     setSending(true);
 
+    let assistantContent = "";
+    const toolCalls: Array<{ name: string; status: "running" | "done" }> = [];
+
+    setMessages((prev) => [
+      ...prev,
+      { role: "assistant", content: "", toolCalls: [] },
+    ]);
+
     try {
-      const data = await api.sendMessage(activeId, text);
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: data.reply },
-      ]);
-      // refresh sidebar title (auto-title on first msg)
+      for await (const event of api.sendMessageStream(activeId!, text)) {
+        switch (event.type) {
+          case "TEXT_MESSAGE_CONTENT": {
+            assistantContent += event.delta as string;
+            setMessages((prev) => {
+              const next = [...prev];
+              next[next.length - 1] = {
+                role: "assistant",
+                content: assistantContent,
+                toolCalls: [...toolCalls],
+              };
+              return next;
+            });
+            break;
+          }
+          case "TOOL_CALL_START": {
+            toolCalls.push({
+              name: event.toolCallName as string,
+              status: "running",
+            });
+            setMessages((prev) => {
+              const next = [...prev];
+              next[next.length - 1] = {
+                role: "assistant",
+                content: assistantContent,
+                toolCalls: [...toolCalls],
+              };
+              return next;
+            });
+            break;
+          }
+          case "TOOL_CALL_END": {
+            const runningCall = toolCalls.find((t) => t.status === "running");
+            if (runningCall) runningCall.status = "done";
+            setMessages((prev) => {
+              const next = [...prev];
+              next[next.length - 1] = {
+                role: "assistant",
+                content: assistantContent,
+                toolCalls: [...toolCalls],
+              };
+              return next;
+            });
+            break;
+          }
+          case "RUN_ERROR": {
+            assistantContent += `\n[错误] ${event.message}`;
+            setMessages((prev) => {
+              const next = [...prev];
+              next[next.length - 1] = {
+                role: "assistant",
+                content: assistantContent,
+                toolCalls: [...toolCalls],
+              };
+              return next;
+            });
+            break;
+          }
+        }
+      }
       await refreshSessions();
     } catch (e) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: `[请求失败] ${(e as Error).message}` },
-      ]);
+      setMessages((prev) => {
+        const next = [...prev];
+        next[next.length - 1] = {
+          role: "assistant",
+          content: `[请求失败] ${(e as Error).message}`,
+        };
+        return next;
+      });
     } finally {
       setSending(false);
     }
@@ -134,10 +201,26 @@ export default function App() {
           )}
           {messages.map((msg, i) => (
             <div key={i} className={`message ${msg.role}`}>
-              {msg.content}
+              <div className="message-content">{msg.content}</div>
+              {msg.toolCalls && msg.toolCalls.length > 0 && (
+                <div className="tool-calls">
+                  {msg.toolCalls.map((tc, j) => (
+                    <span key={j} className={`tool-tag ${tc.status}`}>
+                      {tc.status === "running" ? "⏳" : "✅"} {tc.name}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
-          {sending && <div className="message assistant loading">思考中…</div>}
+          {sending &&
+            !messages.some(
+              (m, idx) =>
+                m.role === "assistant" &&
+                idx === messages.length - 1 &&
+                m.toolCalls &&
+                m.toolCalls.length > 0,
+            ) && <div className="message assistant loading">思考中…</div>}
           <div ref={chatEndRef} />
         </div>
 
