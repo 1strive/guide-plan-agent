@@ -11,7 +11,7 @@ import { loadConfig } from './config.js'
 import { createPool } from './db/pool.js'
 import { createSession, insertMessage, listRecentMessages, sessionExists, listSessions, getSessionMessages, updateSessionTitle } from './db/chatRepo.js'
 import { SYSTEM_PROMPT } from './agent/prompts.js'
-import { runAgentWithTools, runAgentStream, type ChatMessage } from './agent/llm.js'
+import { runAgentStream, type ChatMessage } from './agent/llm.js'
 import { EventType } from './agent/ag-ui.js'
 
 function createLogger() {
@@ -71,48 +71,6 @@ async function main() {
     reply.status(201)
     return { sessionId: id }
   })
-
-  app.post<{ Params: { id: string }; Body: { message?: string } }>(
-    '/sessions/:id/chat',
-    async (req, reply) => {
-      const sessionId = req.params.id
-      const message = req.body?.message?.trim()
-      if (!message) {
-        reply.status(400)
-        return { error: 'message required' }
-      }
-      const exists = await sessionExists(pool, sessionId)
-      if (!exists) {
-        reply.status(404)
-        return { error: 'session not found' }
-      }
-
-      await insertMessage(pool, sessionId, 'user', message)
-      const history = await listRecentMessages(pool, sessionId, config.CHAT_HISTORY_LIMIT)
-
-      const msgs: ChatMessage[] = [{ role: 'system', content: SYSTEM_PROMPT }]
-      for (const h of history) {
-        if (h.role === 'user' || h.role === 'assistant') {
-          msgs.push({ role: h.role, content: h.content })
-        }
-      }
-
-      const result = await runAgentWithTools(pool, config, msgs)
-      await insertMessage(pool, sessionId, 'assistant', result.content)
-
-      // auto-title: first user message → session title
-      const existing = await getSessionMessages(pool, sessionId)
-      if (existing.filter((m) => m.role === 'user').length === 1) {
-        const title = message.length > 30 ? message.slice(0, 30) + '…' : message
-        await updateSessionTitle(pool, sessionId, title)
-      }
-
-      return {
-        reply: result.content,
-        referencedDestinationIds: result.referencedDestinationIds
-      }
-    }
-  )
 
   app.post<{ Params: { id: string }; Body: { message?: string; threadId?: string; runId?: string } }>(
     '/sessions/:id/stream',
