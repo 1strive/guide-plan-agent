@@ -7,7 +7,7 @@ services:
     ports:
       - '3307:3306'
     volumes:
-      - guide_db:/var/lib/mysql
+      - guide_data:/var/lib/mysql
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     healthcheck:
       test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1', '-ptest']
@@ -17,4 +17,4 @@ services:
       start_period: 20s
 
 volumes:
-  guide_db:
+  guide_data:

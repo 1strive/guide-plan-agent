@@ -9,9 +9,10 @@ import path from 'node:path'
 import pino from 'pino'
 import { loadConfig } from './config.js'
 import { createPool } from './db/pool.js'
-import { createSession, insertMessage, listRecentMessages, sessionExists } from './db/chatRepo.js'
+import { createSession, insertMessage, listRecentMessages, sessionExists, listSessions, getSessionMessages, updateSessionTitle } from './db/chatRepo.js'
 import { SYSTEM_PROMPT } from './agent/prompts.js'
-import { runAgentWithTools, type ChatMessage } from './agent/llm.js'
+import { runAgentStream, type ChatMessage } from './agent/llm.js'
+import { EventType } from './agent/ag-ui.js'
 
 function createLogger() {
   const logsDir = path.resolve('logs')
@@ -46,6 +47,24 @@ async function main() {
     }
   })
 
+  app.get('/sessions', async () => {
+    const sessions = await listSessions(pool)
+    return { sessions }
+  })
+
+  app.get<{ Params: { id: string } }>(
+    '/sessions/:id/messages',
+    async (req, reply) => {
+      const exists = await sessionExists(pool, req.params.id)
+      if (!exists) {
+        reply.status(404)
+        return { error: 'session not found' }
+      }
+      const messages = await getSessionMessages(pool, req.params.id)
+      return { messages }
+    }
+  )
+
   app.post('/sessions', async (_req, reply) => {
     const id = randomUUID()
     await createSession(pool, id)
@@ -53,11 +72,14 @@ async function main() {
     return { sessionId: id }
   })
 
-  app.post<{ Params: { id: string }; Body: { message?: string } }>(
-    '/sessions/:id/chat',
+  app.post<{ Params: { id: string }; Body: { message?: string; threadId?: string; runId?: string } }>(
+    '/sessions/:id/stream',
     async (req, reply) => {
       const sessionId = req.params.id
       const message = req.body?.message?.trim()
+      const threadId = req.body?.threadId ?? sessionId
+      const runId = req.body?.runId ?? randomUUID()
+
       if (!message) {
         reply.status(400)
         return { error: 'message required' }
@@ -78,13 +100,32 @@ async function main() {
         }
       }
 
-      const result = await runAgentWithTools(pool, config, msgs)
-      await insertMessage(pool, sessionId, 'assistant', result.content)
+      reply.raw.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no'
+      })
 
-      return {
-        reply: result.content,
-        referencedDestinationIds: result.referencedDestinationIds
+      let fullContent = ''
+      for await (const event of runAgentStream(pool, config, msgs, threadId, runId)) {
+        if (event.type === EventType.TEXT_MESSAGE_CONTENT) {
+          fullContent += event.delta
+        }
+        reply.raw.write(`data: ${JSON.stringify(event)}\n\n`)
       }
+
+      if (fullContent) {
+        await insertMessage(pool, sessionId, 'assistant', fullContent)
+      }
+
+      const existing = await getSessionMessages(pool, sessionId)
+      if (existing.filter(m => m.role === 'user').length === 1) {
+        const title = message.length > 30 ? message.slice(0, 30) + '…' : message
+        await updateSessionTitle(pool, sessionId, title)
+      }
+
+      reply.raw.end()
     }
   )
 
