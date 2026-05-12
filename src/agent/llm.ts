@@ -5,6 +5,7 @@ import { getToolDefinitions, runTool } from './tools.js'
 import {
   EventType,
   type AgUiEvent,
+  type RunFinishedOutcome,
   createRunStarted,
   createRunFinished,
   createRunError,
@@ -16,7 +17,8 @@ import {
   createToolCallStart,
   createToolCallArgs,
   createToolCallEnd,
-  createToolCallResult
+  createToolCallResult,
+  createInterrupt
 } from './ag-ui.js'
 
 export type ChatMessage =
@@ -89,13 +91,54 @@ async function* postChatStream(
   }
 }
 
+// ─── [ASK_USER] 标记检测 ───
+const ASK_USER_PREFIX = '[ASK_USER]'
+const OPTIONS_MARKER = '【选项】'
+
+function parseAskUser(text: string): { isAskUser: boolean; question: string; options: string[] } {
+  const trimmed = text.trim()
+  if (!trimmed.startsWith(ASK_USER_PREFIX)) {
+    return { isAskUser: false, question: '', options: [] }
+  }
+
+  const body = trimmed.slice(ASK_USER_PREFIX.length).trim()
+
+  // 尝试分离问题与选项
+  let question = body
+  let options: string[] = []
+
+  const optIdx = body.indexOf(OPTIONS_MARKER)
+  if (optIdx !== -1) {
+    question = body.slice(0, optIdx).trim()
+    const optBlock = body.slice(optIdx + OPTIONS_MARKER.length).trim()
+    // 按行解析：匹配 "1. xxx" "2. xxx" 或 "1、xxx" 格式
+    const lines = optBlock.split('\n')
+    for (const line of lines) {
+      const m = line.trim().match(/^\d+[.、]\s*(.+)$/)
+      if (m) {
+        options.push(m[1].trim())
+      }
+    }
+  }
+
+  return { isAskUser: true, question: question || '请补充更多信息', options }
+}
+
+// ─── Resume 类型 ───
+export type ResumeItem = {
+  interruptId: string
+  status: 'resolved' | 'cancelled'
+  payload?: Record<string, unknown>
+}
+
 // ─── 流式 Agent：yield AG-UI 事件 ───
 export async function* runAgentStream(
   pool: DbPool,
   config: AppConfig,
   messages: ChatMessage[],
   threadId: string,
-  runId: string
+  runId: string,
+  resume?: ResumeItem[]
 ): AsyncGenerator<AgUiEvent> {
   yield createRunStarted(threadId, runId)
 
@@ -239,7 +282,18 @@ export async function* runAgentStream(
         continue
       }
 
-      // 无工具调用 → 结束
+      // 无工具调用 → 检查是否为 [ASK_USER] 反问
+      const askResult = parseAskUser(assistantContent)
+      if (askResult.isAskUser) {
+        const interrupt = createInterrupt('input_required', askResult.question, {
+          metadata: askResult.options.length > 0 ? { options: askResult.options } : undefined
+        })
+        const outcome: RunFinishedOutcome = { type: 'interrupt', interrupts: [interrupt] }
+        yield createRunFinished(threadId, runId, outcome)
+        return
+      }
+
+      // 正常文本回答 → 结束
       break
     }
   } catch (err) {

@@ -31,16 +31,13 @@ export async function getSessionMessages(sessionId: string) {
     return res.json() as Promise<{ messages: ChatMsgItem[] }>
 }
 
-export async function sendMessage(sessionId: string, message: string) {
-    const res = await fetch(`${BASE}/sessions/${sessionId}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message }),
-    })
-    return res.json() as Promise<{ reply: string; referencedDestinationIds: number[] }>
+// ─── AG-UI 协议流式请求 ───
+export type ResumeItem = {
+    interruptId: string
+    status: 'resolved' | 'cancelled'
+    payload?: Record<string, unknown>
 }
 
-// ─── AG-UI 协议流式请求 ───
 export type AgUiEvent = {
     type: string
     [key: string]: unknown
@@ -48,12 +45,17 @@ export type AgUiEvent = {
 
 export async function* sendMessageStream(
     sessionId: string,
-    message: string
+    message: string,
+    resume?: ResumeItem[]
 ): AsyncGenerator<AgUiEvent> {
+    const body: Record<string, unknown> = { message }
+    if (resume && resume.length > 0) {
+        body.resume = resume
+    }
     const res = await fetch(`${BASE}/sessions/${sessionId}/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify(body),
     })
     if (!res.ok) {
         const errText = await res.text()

@@ -33,10 +33,25 @@ export type RunStartedEvent = BaseEvent & {
     runId: string
 }
 
+// ─── Interrupt 类型 ───
+export type Interrupt = {
+    id: string
+    reason: string
+    message?: string
+    toolCallId?: string
+    responseSchema?: Record<string, unknown>
+    metadata?: Record<string, unknown>
+}
+
+export type RunFinishedOutcome =
+    | { type: 'success' }
+    | { type: 'interrupt'; interrupts: Interrupt[] }
+
 export type RunFinishedEvent = BaseEvent & {
     type: EventType.RUN_FINISHED
     threadId: string
     runId: string
+    outcome?: RunFinishedOutcome
 }
 
 export type RunErrorEvent = BaseEvent & {
@@ -121,8 +136,23 @@ export function createRunStarted(threadId: string, runId: string): RunStartedEve
     return { type: EventType.RUN_STARTED, threadId, runId, timestamp: ts() }
 }
 
-export function createRunFinished(threadId: string, runId: string): RunFinishedEvent {
-    return { type: EventType.RUN_FINISHED, threadId, runId, timestamp: ts() }
+export function createRunFinished(threadId: string, runId: string, outcome?: RunFinishedOutcome): RunFinishedEvent {
+    return { type: EventType.RUN_FINISHED, threadId, runId, outcome, timestamp: ts() }
+}
+
+export function createInterrupt(
+    reason: string,
+    message?: string,
+    opts?: { toolCallId?: string; responseSchema?: Record<string, unknown>; metadata?: Record<string, unknown> }
+): Interrupt {
+    return {
+        id: randomUUID(),
+        reason,
+        message,
+        toolCallId: opts?.toolCallId,
+        responseSchema: opts?.responseSchema,
+        metadata: opts?.metadata
+    }
 }
 
 export function createRunError(message: string, code?: string): RunErrorEvent {

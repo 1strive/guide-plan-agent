@@ -11,8 +11,8 @@ import { loadConfig } from './config.js'
 import { createPool } from './db/pool.js'
 import { createSession, insertMessage, listRecentMessages, sessionExists, listSessions, getSessionMessages, updateSessionTitle } from './db/chatRepo.js'
 import { SYSTEM_PROMPT } from './agent/prompts.js'
-import { runAgentStream, type ChatMessage } from './agent/llm.js'
-import { EventType } from './agent/ag-ui.js'
+import { runAgentStream, type ChatMessage, type ResumeItem } from './agent/llm.js'
+import { EventType, type RunFinishedEvent } from './agent/ag-ui.js'
 
 function createLogger() {
   const logsDir = path.resolve('logs')
@@ -72,13 +72,14 @@ async function main() {
     return { sessionId: id }
   })
 
-  app.post<{ Params: { id: string }; Body: { message?: string; threadId?: string; runId?: string } }>(
+  app.post<{ Params: { id: string }; Body: { message?: string; threadId?: string; runId?: string; resume?: ResumeItem[] } }>(
     '/sessions/:id/stream',
     async (req, reply) => {
       const sessionId = req.params.id
       const message = req.body?.message?.trim()
       const threadId = req.body?.threadId ?? sessionId
       const runId = req.body?.runId ?? randomUUID()
+      const resume = req.body?.resume as ResumeItem[] | undefined
 
       if (!message) {
         reply.status(400)
@@ -108,15 +109,24 @@ async function main() {
       })
 
       let fullContent = ''
-      for await (const event of runAgentStream(pool, config, msgs, threadId, runId)) {
+      let interruptMessage = ''
+      for await (const event of runAgentStream(pool, config, msgs, threadId, runId, resume)) {
         if (event.type === EventType.TEXT_MESSAGE_CONTENT) {
-          fullContent += event.delta
+          fullContent += (event as { delta: string }).delta
+        }
+        if (event.type === EventType.RUN_FINISHED) {
+          const finished = event as RunFinishedEvent
+          if (finished.outcome?.type === 'interrupt') {
+            interruptMessage = finished.outcome.interrupts[0]?.message ?? ''
+          }
         }
         reply.raw.write(`data: ${JSON.stringify(event)}\n\n`)
       }
 
-      if (fullContent) {
-        await insertMessage(pool, sessionId, 'assistant', fullContent)
+      // 存储 assistant 消息：interrupt 场景存反问内容，正常场景存完整回复
+      const storedContent = interruptMessage || fullContent
+      if (storedContent) {
+        await insertMessage(pool, sessionId, 'assistant', storedContent)
       }
 
       const existing = await getSessionMessages(pool, sessionId)

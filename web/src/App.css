@@ -257,3 +257,54 @@ body {
   background: #bbb;
   cursor: not-allowed;
 }
+
+/* ========== Interrupt 反问样式 ========== */
+.message.interrupt {
+  border-color: #faad14;
+  background: #fffbe6;
+}
+
+.interrupt-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 10px;
+  background: #faad14;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+/* ========== Interrupt 选项按钮 ========== */
+.interrupt-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.option-btn {
+  padding: 6px 16px;
+  border: 1px solid #faad14;
+  border-radius: 18px;
+  background: #fff;
+  color: #d48806;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.option-btn:hover:not(:disabled) {
+  background: #faad14;
+  color: #fff;
+}
+
+.option-btn:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.option-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
