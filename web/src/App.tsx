@@ -5,7 +5,12 @@ type ChatMsg = {
   role: "user" | "assistant";
   content: string;
   toolCalls?: Array<{ name: string; status: "running" | "done" }>;
-  interrupt?: { id: string; message: string; reason: string; options?: string[] };
+  interrupt?: {
+    id: string;
+    message: string;
+    reason: string;
+    options?: string[];
+  };
 };
 
 export default function App() {
@@ -157,9 +162,9 @@ export default function App() {
               outcome.interrupts.length > 0
             ) {
               const intItem = outcome.interrupts[0]!;
-              const interruptOptions =
-                (intItem as { metadata?: { options?: string[] } }).metadata
-                  ?.options;
+              const interruptOptions = (
+                intItem as { metadata?: { options?: string[] } }
+              ).metadata?.options;
               currentInterrupt = {
                 id: intItem.id,
                 message: intItem.message ?? "",
@@ -429,20 +434,22 @@ export default function App() {
                 <div className="interrupt-badge">需要补充信息</div>
               )}
               <div className="message-content">{msg.content}</div>
-              {msg.interrupt && msg.interrupt.options && msg.interrupt.options.length > 0 && (
-                <div className="interrupt-options">
-                  {msg.interrupt.options.map((opt, idx) => (
-                    <button
-                      key={idx}
-                      className="option-btn"
-                      disabled={sending}
-                      onClick={() => handleOptionClick(opt)}
-                    >
-                      {opt}
-                    </button>
-                  ))}
-                </div>
-              )}
+              {msg.interrupt &&
+                msg.interrupt.options &&
+                msg.interrupt.options.length > 0 && (
+                  <div className="interrupt-options">
+                    {msg.interrupt.options.map((opt, idx) => (
+                      <button
+                        key={idx}
+                        className="option-btn"
+                        disabled={sending}
+                        onClick={() => handleOptionClick(opt)}
+                      >
+                        {opt}
+                      </button>
+                    ))}
+                  </div>
+                )}
               {msg.toolCalls && msg.toolCalls.length > 0 && (
                 <div className="tool-calls">
                   {msg.toolCalls.map((tc, j) => (
