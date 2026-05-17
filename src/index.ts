@@ -94,12 +94,15 @@ async function main() {
       await insertMessage(pool, sessionId, 'user', message)
       const history = await listRecentMessages(pool, sessionId, config.CHAT_HISTORY_LIMIT)
 
+
       const msgs: ChatMessage[] = [{ role: 'system', content: SYSTEM_PROMPT }]
       for (const h of history) {
         if (h.role === 'user' || h.role === 'assistant') {
           msgs.push({ role: h.role, content: h.content })
         }
       }
+
+      req.log.info({ history, msgs }, 'ja')
 
       reply.raw.writeHead(200, {
         'Content-Type': 'text/event-stream',

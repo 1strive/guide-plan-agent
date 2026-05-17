@@ -182,6 +182,7 @@ export async function* runAgentStream(
       let lastUsage: TokenUsage | null = null
 
       for await (const chunk of stream) {
+        logger?.info({ chunk }, 'LLM chunk received')
         const delta = chunk.choices?.[0]?.delta
         const finishReason = chunk.choices?.[0]?.finish_reason
 
