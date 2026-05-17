@@ -9,7 +9,7 @@ import path from 'node:path'
 import pino from 'pino'
 import { loadConfig } from './config.js'
 import { createPool } from './db/pool.js'
-import { createSession, insertMessage, listRecentMessages, sessionExists, listSessions, getSessionMessages, updateSessionTitle } from './db/chatRepo.js'
+import { createSession, insertMessage, listRecentMessages, sessionExists, listSessions, getSessionMessages, updateSessionTitle, updateSessionTokens } from './db/chatRepo.js'
 import { SYSTEM_PROMPT } from './agent/prompts.js'
 import { runAgentStream, type ChatMessage, type ResumeItem } from './agent/llm.js'
 import { EventType, type RunFinishedEvent } from './agent/ag-ui.js'
@@ -110,7 +110,7 @@ async function main() {
 
       let fullContent = ''
       let interruptMessage = ''
-      for await (const event of runAgentStream(pool, config, msgs, threadId, runId, resume)) {
+      for await (const event of runAgentStream(pool, config, msgs, threadId, runId, app.log, resume)) {
         if (event.type === EventType.TEXT_MESSAGE_CONTENT) {
           fullContent += (event as { delta: string }).delta
         }
@@ -118,6 +118,10 @@ async function main() {
           const finished = event as RunFinishedEvent
           if (finished.outcome?.type === 'interrupt') {
             interruptMessage = finished.outcome.interrupts[0]?.message ?? ''
+          }
+          // 保存 token 用量到数据库
+          if (finished.usage) {
+            await updateSessionTokens(pool, sessionId, finished.usage.totalTokens)
           }
         }
         reply.raw.write(`data: ${JSON.stringify(event)}\n\n`)

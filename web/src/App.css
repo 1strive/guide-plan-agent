@@ -105,6 +105,22 @@ body {
   margin-top: 4px;
 }
 
+.session-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+
+.session-tokens {
+  font-size: 10px;
+  color: #1677ff;
+  background: #e6f4ff;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
 /* ========== 右侧聊天区 ========== */
 .chat-area {
   flex: 1;

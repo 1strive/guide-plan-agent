@@ -1,5 +1,6 @@
 import type { AppConfig } from '../config.js'
 import type { DbPool } from '../db/pool.js'
+import type { Logger } from 'pino'
 import { randomUUID } from 'node:crypto'
 import { getToolDefinitions, runTool } from './tools.js'
 import {
@@ -20,6 +21,7 @@ import {
   createToolCallResult,
   createInterrupt
 } from './ag-ui.js'
+import { type TokenUsage, accumulateUsage, estimateTokens } from './token-usage.js'
 
 export type ChatMessage =
   | { role: 'system'; content: string }
@@ -41,7 +43,7 @@ function chatUrl(config: AppConfig): string {
 
 // ─── 流式请求：解析 OpenAI SSE ───
 type StreamChunk = {
-  choices: Array<{
+  choices?: Array<{
     finish_reason: string | null
     delta: {
       role?: string
@@ -54,6 +56,11 @@ type StreamChunk = {
       }>
     }
   }>
+  usage?: {
+    prompt_tokens: number
+    completion_tokens: number
+    total_tokens: number
+  }
 }
 
 async function* postChatStream(
@@ -66,7 +73,7 @@ async function* postChatStream(
       Authorization: `Bearer ${config.OPENAI_API_KEY}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ ...body, stream: true })
+    body: JSON.stringify({ ...body, stream: true, stream_options: { include_usage: true } })
   })
   if (!res.ok) {
     const t = await res.text()
@@ -138,6 +145,7 @@ export async function* runAgentStream(
   messages: ChatMessage[],
   threadId: string,
   runId: string,
+  logger: Logger,
   resume?: ResumeItem[]
 ): AsyncGenerator<AgUiEvent> {
   yield createRunStarted(threadId, runId)
@@ -145,9 +153,12 @@ export async function* runAgentStream(
   const tools = getToolDefinitions()
   const referenced = new Set<number>()
   let current: ChatMessage[] = [...messages]
+  let totalUsage: TokenUsage | null = null
+  let roundsCount = 0
 
   try {
     for (let round = 0; round < config.LLM_MAX_TOOL_ROUNDS; round++) {
+      roundsCount++
       const stream = postChatStream(config, {
         model: config.OPENAI_MODEL,
         messages: current,
@@ -168,10 +179,20 @@ export async function* runAgentStream(
       let msgId = randomUUID()
       let textStarted = false
       let toolStepStarted = false
+      let lastUsage: TokenUsage | null = null
 
       for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta
-        const finishReason = chunk.choices[0]?.finish_reason
+        const delta = chunk.choices?.[0]?.delta
+        const finishReason = chunk.choices?.[0]?.finish_reason
+
+        // 提取 usage（通常在最后一个 chunk 中）
+        if (chunk.usage) {
+          lastUsage = {
+            promptTokens: chunk.usage.prompt_tokens,
+            completionTokens: chunk.usage.completion_tokens,
+            totalTokens: chunk.usage.total_tokens
+          }
+        }
 
         // 文本内容
         if (delta?.content) {
@@ -242,6 +263,22 @@ export async function* runAgentStream(
         }
       }
 
+      // 累加本轮 usage（API 未返回则降级估算）
+      if (lastUsage) {
+        totalUsage = accumulateUsage(totalUsage, lastUsage)
+      } else {
+        // 降级：按字符数估算
+        const promptTokens = estimateTokens(
+          current.map(m => m.role === 'assistant' ? m.content ?? '' : m.role === 'tool' ? m.content : m.content).join('\n')
+        )
+        const completionTokens = estimateTokens(assistantContent)
+        totalUsage = accumulateUsage(totalUsage, {
+          promptTokens,
+          completionTokens,
+          totalTokens: promptTokens + completionTokens
+        })
+      }
+
       // 有工具调用 → 执行
       if (collectedToolCalls.length > 0) {
         current.push({
@@ -289,7 +326,16 @@ export async function* runAgentStream(
           metadata: askResult.options.length > 0 ? { options: askResult.options } : undefined
         })
         const outcome: RunFinishedOutcome = { type: 'interrupt', interrupts: [interrupt] }
-        yield createRunFinished(threadId, runId, outcome)
+        logger.info({
+          msg: 'llm_usage',
+          threadId,
+          runId,
+          rounds: roundsCount,
+          promptTokens: totalUsage?.promptTokens,
+          completionTokens: totalUsage?.completionTokens,
+          totalTokens: totalUsage?.totalTokens
+        })
+        yield createRunFinished(threadId, runId, outcome, totalUsage ?? undefined)
         return
       }
 
@@ -300,5 +346,15 @@ export async function* runAgentStream(
     yield createRunError(String(err), 'AGENT_ERROR')
   }
 
-  yield createRunFinished(threadId, runId)
+  logger.info({
+    msg: 'llm_usage',
+    threadId,
+    runId,
+    rounds: roundsCount,
+    promptTokens: totalUsage?.promptTokens,
+    completionTokens: totalUsage?.completionTokens,
+    totalTokens: totalUsage?.totalTokens
+  })
+
+  yield createRunFinished(threadId, runId, undefined, totalUsage ?? undefined)
 }

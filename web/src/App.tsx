@@ -400,8 +400,15 @@ export default function App() {
               <span className="session-title">
                 {s.title || s.id.slice(0, 8) + "…"}
               </span>
-              <span className="session-time">
-                {new Date(s.createdAt).toLocaleDateString()}
+              <span className="session-meta">
+                {s.totalTokens > 0 && (
+                  <span className="session-tokens">
+                    {s.totalTokens.toLocaleString()} tokens
+                  </span>
+                )}
+                <span className="session-time">
+                  {new Date(s.createdAt).toLocaleDateString()}
+                </span>
               </span>
             </li>
           ))}
