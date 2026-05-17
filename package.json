@@ -7,9 +7,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
-    "migrate": "tsx scripts/migrate.ts",
-    "seed": "tsx scripts/seed.ts",
-    "docker:up": "docker compose up -d"
+    "setup": "docker compose up -d && tsx scripts/migrate.ts && tsx scripts/seed.ts",
+    "web:dev": "cd web && npm run dev"
   },
   "engines": {
     "node": ">=18"
