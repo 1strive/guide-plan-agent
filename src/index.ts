@@ -9,7 +9,7 @@ import path from 'node:path'
 import pino from 'pino'
 import { loadConfig } from './config.js'
 import { createPool } from './db/pool.js'
-import { createSession, insertMessage, listRecentMessages, sessionExists, listSessions, getSessionMessages, updateSessionTitle } from './db/chatRepo.js'
+import { createSession, insertMessage, listRecentMessages, sessionExists, listSessions, getSessionMessages, updateSessionTitle, updateSessionTokens } from './db/chatRepo.js'
 import { SYSTEM_PROMPT } from './agent/prompts.js'
 import { runAgentStream, type ChatMessage, type ResumeItem, type TokenUsage } from './agent/llm.js'
 import { EventType, type RunFinishedEvent } from './agent/ag-ui.js'
@@ -86,6 +86,7 @@ async function main() {
    * - SSE 心跳：每 15s 发送注释行 `: ping`，防止反向代理在长工具执行时按 idle 超时断连
    * - usage 累加 + 计价：聚合每轮 LLM 的 prompt/completion tokens，按 MODEL_PRICE_*_PER_1K 估算 cost_usd
    * - reqLog：child logger 绑定 runId，串联整次请求所有日志，对应阶段4/5 的 trace_id 需求
+   * - updateSessionTokens：把累计 token 持久化到 chat_sessions，便于按会话维度做成本审计
    */
   app.post<{ Params: { id: string }; Body: { message?: string; threadId?: string; runId?: string; resume?: ResumeItem[] } }>(
     '/sessions/:id/stream',
@@ -145,12 +146,12 @@ async function main() {
       }, 15_000)
 
       // ── token 用量累加 + 成本估算 ──────────────────────────
-      const totalUsage: TokenUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+      const totalUsage: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
       const startedAt = Date.now()
       const onUsage = (u: TokenUsage, round: number) => {
-        totalUsage.prompt_tokens += u.prompt_tokens ?? 0
-        totalUsage.completion_tokens += u.completion_tokens ?? 0
-        totalUsage.total_tokens += u.total_tokens ?? 0
+        totalUsage.promptTokens += u.promptTokens
+        totalUsage.completionTokens += u.completionTokens
+        totalUsage.totalTokens += u.totalTokens
         reqLog.info(
           { round, usage: u, model: config.OPENAI_MODEL },
           'llm round usage'
@@ -195,11 +196,19 @@ async function main() {
           const title = message.length > 30 ? message.slice(0, 30) + '…' : message
           await updateSessionTitle(pool, sessionId, title)
         }
+        // Task 1.2：把本次累计 token 写回 chat_sessions，便于按会话审计成本
+        if (totalUsage.totalTokens > 0) {
+          try {
+            await updateSessionTokens(pool, sessionId, totalUsage.totalTokens)
+          } catch (err) {
+            reqLog.error({ err }, 'updateSessionTokens failed')
+          }
+        }
       }
 
       // Task 1.2 / 八股 08 §2.5：每次请求结束输出聚合用量与成本
-      const costInput = (totalUsage.prompt_tokens / 1000) * config.MODEL_PRICE_INPUT_PER_1K
-      const costOutput = (totalUsage.completion_tokens / 1000) * config.MODEL_PRICE_OUTPUT_PER_1K
+      const costInput = (totalUsage.promptTokens / 1000) * config.MODEL_PRICE_INPUT_PER_1K
+      const costOutput = (totalUsage.completionTokens / 1000) * config.MODEL_PRICE_OUTPUT_PER_1K
       reqLog.info(
         {
           model: config.OPENAI_MODEL,

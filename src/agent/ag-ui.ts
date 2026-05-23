@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { TokenUsage } from './token-usage.js'
 
 // ─── EventType 枚举 ───
 // 与 @ag-ui/core EventType 完全对齐
@@ -52,6 +53,7 @@ export type RunFinishedEvent = BaseEvent & {
     threadId: string
     runId: string
     outcome?: RunFinishedOutcome
+    usage?: TokenUsage
 }
 
 export type RunErrorEvent = BaseEvent & {
@@ -136,8 +138,13 @@ export function createRunStarted(threadId: string, runId: string): RunStartedEve
     return { type: EventType.RUN_STARTED, threadId, runId, timestamp: ts() }
 }
 
-export function createRunFinished(threadId: string, runId: string, outcome?: RunFinishedOutcome): RunFinishedEvent {
-    return { type: EventType.RUN_FINISHED, threadId, runId, outcome, timestamp: ts() }
+export function createRunFinished(
+    threadId: string,
+    runId: string,
+    outcome?: RunFinishedOutcome,
+    usage?: TokenUsage
+): RunFinishedEvent {
+    return { type: EventType.RUN_FINISHED, threadId, runId, outcome, usage, timestamp: ts() }
 }
 
 export function createInterrupt(

@@ -20,6 +20,9 @@ import {
   createToolCallResult,
   createInterrupt
 } from './ag-ui.js'
+import { type TokenUsage, accumulateUsage, estimateTokens } from './token-usage.js'
+
+export type { TokenUsage }
 
 export type ChatMessage =
   | { role: 'system'; content: string }
@@ -39,21 +42,9 @@ function chatUrl(config: AppConfig): string {
   return `${config.OPENAI_BASE_URL.replace(/\/$/, '')}/chat/completions`
 }
 
-/**
- * Task 1.2 — Token 用量类型
- *
- * 规划：docs/开发规划.md Task 1.2（usage 字段统计）
- * 八股：docs/01-面试八股文/08-工程化实践.md §2 Token 成本控制
- */
-export type TokenUsage = {
-  prompt_tokens: number
-  completion_tokens: number
-  total_tokens: number
-}
-
 // ─── 流式请求：解析 OpenAI SSE ───
 type StreamChunk = {
-  choices: Array<{
+  choices?: Array<{
     finish_reason: string | null
     delta: {
       role?: string
@@ -67,8 +58,13 @@ type StreamChunk = {
     }
   }>
   // Task 1.2 / 八股 08 §2.2：仅在请求体声明 stream_options.include_usage=true 时下发，
-  // 通常只出现在最后一个 chunk（choices 为空数组）
-  usage?: TokenUsage
+  // 通常只出现在最后一个 chunk（choices 为空数组）。OpenAI 协议为 snake_case，
+  // 进入业务层前会在 runAgentStream 转成 camelCase（见 token-usage.ts）
+  usage?: {
+    prompt_tokens: number
+    completion_tokens: number
+    total_tokens: number
+  }
 }
 
 /**
@@ -216,8 +212,12 @@ export type ResumeItem = {
  * - 02-核心框架.md ReAct 循环
  * - 08-工程化实践.md §2 Token 成本 / §3 全链路可观测
  *
- * 入参 signal：上游（HTTP handler）监听 req close 后 abort，确保客户端断开立即停止 LLM 调用，
- * 避免空跑产生 token 费用。usageReport 回调用于把每轮 usage 累加交给上层打日志。
+ * 入参 options.signal：上游（HTTP handler）监听 req close 后 abort，
+ * 确保客户端断开立即停止 LLM 调用，避免空跑产生 token 费用。
+ *
+ * 入参 options.onUsage：每轮 LLM 结束后回调一次（含 fallback 估算），
+ * 上层用它打日志或做实时观测；总 usage 也会随 RUN_FINISHED 事件下发，
+ * 便于事件订阅者（前端 UI / DB 持久化）一次性拿到聚合结果。
  */
 export async function* runAgentStream(
   pool: DbPool,
@@ -237,10 +237,11 @@ export async function* runAgentStream(
   const referenced = new Set<number>()
   let current: ChatMessage[] = [...messages]
   const signal = options?.signal
+  let totalUsage: TokenUsage | null = null
 
   try {
     for (let round = 0; round < config.LLM_MAX_TOOL_ROUNDS; round++) {
-      if (signal?.aborted) return
+      if (signal?.aborted) break
       const stream = postChatStream(
         config,
         {
@@ -268,14 +269,20 @@ export async function* runAgentStream(
       let msgId = randomUUID()
       let textStarted = false
       let toolStepStarted = false
+      let lastUsage: TokenUsage | null = null
 
       for await (const chunk of stream) {
         // Task 1.2 / 八股 08 §2.2：usage 通常出现在最后一个 chunk（choices 为空）
+        // 协议层 snake_case → 业务层 camelCase 的边界转换
         if (chunk.usage) {
-          options?.onUsage?.(chunk.usage, round)
+          lastUsage = {
+            promptTokens: chunk.usage.prompt_tokens,
+            completionTokens: chunk.usage.completion_tokens,
+            totalTokens: chunk.usage.total_tokens
+          }
         }
-        const delta = chunk.choices[0]?.delta
-        const finishReason = chunk.choices[0]?.finish_reason
+        const delta = chunk.choices?.[0]?.delta
+        const finishReason = chunk.choices?.[0]?.finish_reason
 
         // 文本内容
         if (delta?.content) {
@@ -346,6 +353,26 @@ export async function* runAgentStream(
         }
       }
 
+      // Task 1.2：API 未返回 usage 时降级估算（部分兼容协议不支持 stream_options）
+      const roundUsage: TokenUsage = lastUsage ?? (() => {
+        const promptText = current
+          .map(m => {
+            if (m.role === 'tool') return m.content
+            if (m.role === 'assistant') return m.content ?? ''
+            return m.content
+          })
+          .join('\n')
+        const promptTokens = estimateTokens(promptText)
+        const completionTokens = estimateTokens(assistantContent)
+        return {
+          promptTokens,
+          completionTokens,
+          totalTokens: promptTokens + completionTokens
+        }
+      })()
+      totalUsage = accumulateUsage(totalUsage, roundUsage)
+      options?.onUsage?.(roundUsage, round)
+
       // 有工具调用 → 执行
       if (collectedToolCalls.length > 0) {
         current.push({
@@ -393,7 +420,7 @@ export async function* runAgentStream(
           metadata: askResult.options.length > 0 ? { options: askResult.options } : undefined
         })
         const outcome: RunFinishedOutcome = { type: 'interrupt', interrupts: [interrupt] }
-        yield createRunFinished(threadId, runId, outcome)
+        yield createRunFinished(threadId, runId, outcome, totalUsage ?? undefined)
         return
       }
 
@@ -404,5 +431,5 @@ export async function* runAgentStream(
     yield createRunError(String(err), 'AGENT_ERROR')
   }
 
-  yield createRunFinished(threadId, runId)
+  yield createRunFinished(threadId, runId, undefined, totalUsage ?? undefined)
 }

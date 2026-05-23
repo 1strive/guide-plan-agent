@@ -3,6 +3,7 @@ const BASE = '/api'
 export type SessionItem = {
     id: string
     title: string | null
+    totalTokens: number
     createdAt: string
 }
 

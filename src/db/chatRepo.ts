@@ -42,12 +42,13 @@ export async function listRecentMessages(
 export type SessionRow = {
   id: string
   title: string | null
+  totalTokens: number
   createdAt: string
 }
 
 export async function listSessions(pool: DbPool): Promise<SessionRow[]> {
   const [rows] = await pool.query<RowDataPacket[]>(
-    'SELECT id, title, created_at AS createdAt FROM chat_sessions ORDER BY created_at DESC'
+    'SELECT id, title, total_tokens AS totalTokens, created_at AS createdAt FROM chat_sessions ORDER BY created_at DESC'
   )
   return rows as SessionRow[]
 }
@@ -71,6 +72,17 @@ export async function updateSessionTitle(
   await pool.query(
     'UPDATE chat_sessions SET title = ? WHERE id = ?',
     [title, sessionId]
+  )
+}
+
+export async function updateSessionTokens(
+  pool: DbPool,
+  sessionId: string,
+  tokens: number
+): Promise<void> {
+  await pool.query(
+    'UPDATE chat_sessions SET total_tokens = total_tokens + ? WHERE id = ?',
+    [tokens, sessionId]
   )
 }
 

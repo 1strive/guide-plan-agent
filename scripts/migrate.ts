@@ -1,7 +1,7 @@
 import { config } from 'dotenv'
 config()
 config({ path: '.env.local', override: true })
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import mysql from 'mysql2/promise'
@@ -22,9 +22,28 @@ async function main() {
     `CREATE DATABASE IF NOT EXISTS \`${config.MYSQL_DATABASE}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
   )
   await conn.query(`USE \`${config.MYSQL_DATABASE}\``)
-  const sqlPath = join(__dirname, '..', 'src', 'db', 'migrations', '001_init.sql')
-  const sql = readFileSync(sqlPath, 'utf8')
-  await conn.query(sql)
+
+  const migrationsDir = join(__dirname, '..', 'src', 'db', 'migrations')
+  const files = readdirSync(migrationsDir)
+    .filter(f => f.endsWith('.sql'))
+    .sort()
+
+  for (const file of files) {
+    const sqlPath = join(migrationsDir, file)
+    const sql = readFileSync(sqlPath, 'utf8')
+    try {
+      await conn.query(sql)
+      console.log(`  ✔ ${file}`)
+    } catch (err: any) {
+      // 忽略"列已存在"或"表已存在"等幂等错误
+      if (err.errno === 1060 || err.errno === 1050) {
+        console.log(`  ⊘ ${file} (already applied)`)
+      } else {
+        throw err
+      }
+    }
+  }
+
   await conn.end()
   console.log('Migration OK:', config.MYSQL_DATABASE)
 }
