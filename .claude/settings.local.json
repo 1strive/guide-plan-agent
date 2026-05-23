@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc *)",
+      "Bash(echo \"---exit:$?---\")",
+      "Bash(grep -rn *)",
+      "Bash(git add *)"
+    ]
+  }
+}
