@@ -39,6 +39,18 @@ function chatUrl(config: AppConfig): string {
   return `${config.OPENAI_BASE_URL.replace(/\/$/, '')}/chat/completions`
 }
 
+/**
+ * Task 1.2 — Token 用量类型
+ *
+ * 规划：docs/开发规划.md Task 1.2（usage 字段统计）
+ * 八股：docs/01-面试八股文/08-工程化实践.md §2 Token 成本控制
+ */
+export type TokenUsage = {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+}
+
 // ─── 流式请求：解析 OpenAI SSE ───
 type StreamChunk = {
   choices: Array<{
@@ -54,20 +66,57 @@ type StreamChunk = {
       }>
     }
   }>
+  // Task 1.2 / 八股 08 §2.2：仅在请求体声明 stream_options.include_usage=true 时下发，
+  // 通常只出现在最后一个 chunk（choices 为空数组）
+  usage?: TokenUsage
 }
 
+/**
+ * postChatStream — 流式调用 OpenAI 兼容 /chat/completions
+ *
+ * 规划：Task 1.1（SSE 流式） + Task 1.2（usage 透传）
+ * 八股：
+ * - 09-Prompt工程.md §2.4 推理参数（temperature/top_p/max_tokens 在请求体透传）
+ * - 08-工程化实践.md §1 模型路由与容错（超时控制） / §2.2 Token 计数（stream_options）
+ *
+ * 实现要点：
+ * - 显式 stream_options.include_usage：流式默认不返回 usage，必须主动声明
+ * - AbortSignal 串到 fetch：客户端断开 → controller.abort → 立即停止上游消耗
+ * - 解析层 try/catch：单个坏 chunk 不应让整条流崩溃，八股 08 §3 强调可观测要"降级而非中断"
+ * - 兼容 CRLF 与 SSE 注释行（":" 开头是心跳/注释，需跳过）
+ */
 async function* postChatStream(
   config: AppConfig,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  signal?: AbortSignal
 ): AsyncGenerator<StreamChunk> {
-  const res = await fetch(chatUrl(config), {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.OPENAI_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ ...body, stream: true })
-  })
+  // 八股 08 §1.2：即使外层有 abort，fetch 自身也应有超时兜底
+  const timeoutCtl = new AbortController()
+  const timer = setTimeout(() => timeoutCtl.abort(), config.LLM_REQUEST_TIMEOUT_MS)
+  const linkedSignal = signal
+    ? anySignal([signal, timeoutCtl.signal])
+    : timeoutCtl.signal
+
+  let res: Response
+  try {
+    res = await fetch(chatUrl(config), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        ...body,
+        stream: true,
+        // Task 1.2：让最后一个 chunk 带回 usage
+        stream_options: { include_usage: true }
+      }),
+      signal: linkedSignal
+    })
+  } finally {
+    clearTimeout(timer)
+  }
+
   if (!res.ok) {
     const t = await res.text()
     throw new Error(`chat/completions stream ${res.status}: ${t}`)
@@ -75,20 +124,48 @@ async function* postChatStream(
   const reader = res.body!.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() ?? ''
-    for (const line of lines) {
-      const trimmed = line.trim()
-      if (!trimmed || trimmed === 'data: [DONE]') continue
-      if (trimmed.startsWith('data: ')) {
-        yield JSON.parse(trimmed.slice(6))
+  try {
+    while (true) {
+      // 客户端断开后立即中止读取，避免继续从远端拉数据
+      if (signal?.aborted) break
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      // 兼容 CRLF / LF
+      const lines = buffer.split(/\r?\n/)
+      buffer = lines.pop() ?? ''
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        // SSE 注释/心跳行以 ":" 开头，跳过
+        if (trimmed.startsWith(':')) continue
+        if (trimmed === 'data: [DONE]') continue
+        if (!trimmed.startsWith('data: ')) continue
+        const payload = trimmed.slice(6)
+        try {
+          yield JSON.parse(payload) as StreamChunk
+        } catch {
+          // 八股 08 §3.2：单条坏数据应记录但不中断流；此处保持沉默由上层日志兜底
+          continue
+        }
       }
     }
+  } finally {
+    try { await reader.cancel() } catch { /* ignore */ }
   }
+}
+
+/** 多 AbortSignal 合并：任一触发即整体 abort */
+function anySignal(signals: AbortSignal[]): AbortSignal {
+  const ctl = new AbortController()
+  for (const s of signals) {
+    if (s.aborted) {
+      ctl.abort()
+      break
+    }
+    s.addEventListener('abort', () => ctl.abort(), { once: true })
+  }
+  return ctl.signal
 }
 
 // ─── [ASK_USER] 标记检测 ───
@@ -131,30 +208,53 @@ export type ResumeItem = {
   payload?: Record<string, unknown>
 }
 
-// ─── 流式 Agent：yield AG-UI 事件 ───
+/**
+ * runAgentStream — 多轮 ReAct 循环 + AG-UI 事件流
+ *
+ * 规划：Task 1.1 流式输出 / Task 1.2 token 计数 / 阶段4 Task 4.1 ReAct 可观测
+ * 八股：
+ * - 02-核心框架.md ReAct 循环
+ * - 08-工程化实践.md §2 Token 成本 / §3 全链路可观测
+ *
+ * 入参 signal：上游（HTTP handler）监听 req close 后 abort，确保客户端断开立即停止 LLM 调用，
+ * 避免空跑产生 token 费用。usageReport 回调用于把每轮 usage 累加交给上层打日志。
+ */
 export async function* runAgentStream(
   pool: DbPool,
   config: AppConfig,
   messages: ChatMessage[],
   threadId: string,
   runId: string,
-  resume?: ResumeItem[]
+  resume?: ResumeItem[],
+  options?: {
+    signal?: AbortSignal
+    onUsage?: (usage: TokenUsage, round: number) => void
+  }
 ): AsyncGenerator<AgUiEvent> {
   yield createRunStarted(threadId, runId)
 
   const tools = getToolDefinitions()
   const referenced = new Set<number>()
   let current: ChatMessage[] = [...messages]
+  const signal = options?.signal
 
   try {
     for (let round = 0; round < config.LLM_MAX_TOOL_ROUNDS; round++) {
-      const stream = postChatStream(config, {
-        model: config.OPENAI_MODEL,
-        messages: current,
-        tools,
-        tool_choice: 'auto',
-        temperature: config.LLM_TEMPERATURE
-      })
+      if (signal?.aborted) return
+      const stream = postChatStream(
+        config,
+        {
+          model: config.OPENAI_MODEL,
+          messages: current,
+          tools,
+          tool_choice: 'auto',
+          // Task 1.1 / 八股 09 §2.4：推理参数全量透传
+          temperature: config.LLM_TEMPERATURE,
+          top_p: config.LLM_TOP_P,
+          max_tokens: config.LLM_MAX_TOKENS
+        },
+        signal
+      )
 
       let assistantContent = ''
       const collectedToolCalls: Array<{
@@ -170,6 +270,10 @@ export async function* runAgentStream(
       let toolStepStarted = false
 
       for await (const chunk of stream) {
+        // Task 1.2 / 八股 08 §2.2：usage 通常出现在最后一个 chunk（choices 为空）
+        if (chunk.usage) {
+          options?.onUsage?.(chunk.usage, round)
+        }
         const delta = chunk.choices[0]?.delta
         const finishReason = chunk.choices[0]?.finish_reason
 
