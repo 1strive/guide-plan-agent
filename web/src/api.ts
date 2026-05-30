@@ -22,6 +22,14 @@ export async function createSession() {
     return res.json() as Promise<{ sessionId: string }>
 }
 
+// 八股 05-记忆系统.md §3.2.2 CRUD「删」:幂等删除,404 视为已删除
+export async function deleteSession(sessionId: string) {
+    const res = await fetch(`${BASE}/sessions/${sessionId}`, { method: 'DELETE' })
+    if (!res.ok && res.status !== 404) {
+        throw new Error(`delete failed: ${res.status}`)
+    }
+}
+
 export async function listSessions() {
     const res = await fetch(`${BASE}/sessions`)
     return res.json() as Promise<{ sessions: SessionItem[] }>
@@ -44,10 +52,13 @@ export type AgUiEvent = {
     [key: string]: unknown
 }
 
+// 八股 08-工程化实践.md §1 容错:signal 让调用方可在切换/删除会话时主动 abort
+// fetch 被 abort 后 reader.read() 抛 AbortError,由外层 try/catch 处理
 export async function* sendMessageStream(
     sessionId: string,
     message: string,
-    resume?: ResumeItem[]
+    resume?: ResumeItem[],
+    signal?: AbortSignal
 ): AsyncGenerator<AgUiEvent> {
     const body: Record<string, unknown> = { message }
     if (resume && resume.length > 0) {
@@ -57,6 +68,7 @@ export async function* sendMessageStream(
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
+        signal,
     })
     if (!res.ok) {
         const errText = await res.text()

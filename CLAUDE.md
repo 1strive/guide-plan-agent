@@ -6,6 +6,7 @@
 
 - 项目命令、代码风格、提交信息约定:见 [AGENTS.md - Setup commands / Code style](./AGENTS.md)
 - **学习项目专属注释规则(强制)**:见 [AGENTS.md - 学习项目专属注释规则](./AGENTS.md#学习项目专属注释规则重要)
+- **架构文档同步规则(强制)**:改核心模块后必须回核 [docs/04-架构文档/agent-架构.md](./docs/04-架构文档/agent-架构.md);详见 [AGENTS.md - 架构文档同步规则](./AGENTS.md#架构文档同步规则强制)
 - 开发节奏与任务编号:见 [docs/开发规划.md](./docs/开发规划.md)
 - 面试考点对照表:见 [docs/01-面试八股文/](./docs/01-面试八股文/)
 
@@ -23,4 +24,5 @@
 
 - `grep -rn "Task X.Y" src/` 能否定位到本次相关实现?
 - 改动是否同时更新了相关八股引用(若新增/重构涉及考点)?
+- 改动涉及 HTTP 路由 / `runAgentStream` / `prompts/` / `tools.ts` / `chatRepo.ts` / abort 行为等 — 是否回核 `docs/04-架构文档/agent-架构.md` 相关章节?(无需更新也请显式说明)
 - 类型检查通过:`npx tsc --noEmit`

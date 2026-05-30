@@ -34,7 +34,10 @@ const envSchema = dbEnvSchema.extend({
   LLM_TOP_P: z.coerce.number().default(1),
   LLM_REQUEST_TIMEOUT_MS: z.coerce.number().default(60_000),
   MODEL_PRICE_INPUT_PER_1K: z.coerce.number().default(0),
-  MODEL_PRICE_OUTPUT_PER_1K: z.coerce.number().default(0)
+  MODEL_PRICE_OUTPUT_PER_1K: z.coerce.number().default(0),
+  // Task 2.1:Prompt 版本切换;具体值由 src/agent/prompts/index.ts 的 registry 决定,
+  // 未知版本运行期会 throw(避免 enum 限定导致每加版本都要改 schema)
+  PROMPT_VERSION: z.string().default('v1_base')
 })
 
 export type AppConfig = z.infer<typeof envSchema>

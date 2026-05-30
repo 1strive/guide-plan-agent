@@ -69,11 +69,41 @@ body {
 }
 
 .session-item {
+  position: relative;
   padding: 10px 12px;
   border-radius: 8px;
   cursor: pointer;
   margin-bottom: 4px;
   transition: background 0.15s;
+}
+
+.session-delete {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: #999;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.15s,
+    background 0.15s,
+    color 0.15s;
+}
+
+.session-item:hover .session-delete {
+  opacity: 1;
+}
+
+.session-delete:hover {
+  background: #ffe7e7;
+  color: #d4380d;
 }
 
 .session-item:hover {

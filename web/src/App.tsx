@@ -26,6 +26,17 @@ export default function App() {
     options?: string[];
   } | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  // 八股 08-工程化实践.md §1 容错:Chat App 阶段的"客户端断开 = 整链终止"。
+  // 切换 / 新建 / 删除当前会话时 abort 正在跑的 fetch,后端 req.raw 'close' 钩子接着 abort agent run。
+  // Task 4.5 重构为 Run-as-Resource 后,这个 ref 会被「显式停止按钮 + 切走仅 unsubscribe」取代。
+  const streamCtrlRef = useRef<AbortController | null>(null);
+
+  function abortInFlight() {
+    if (streamCtrlRef.current) {
+      streamCtrlRef.current.abort();
+      streamCtrlRef.current = null;
+    }
+  }
 
   const refreshSessions = useCallback(async () => {
     const data = await api.listSessions();
@@ -41,6 +52,8 @@ export default function App() {
   }, [messages]);
 
   async function handleNewSession() {
+    abortInFlight();
+    setSending(false);
     const data = await api.createSession();
     const newId = data.sessionId;
     await refreshSessions();
@@ -48,6 +61,8 @@ export default function App() {
   }
 
   async function switchSession(id: string) {
+    abortInFlight();
+    setSending(false);
     setActiveId(id);
     setMessages([]);
     setPendingInterrupt(null);
@@ -65,6 +80,24 @@ export default function App() {
     }
   }
 
+  async function handleDeleteSession(id: string, e: React.MouseEvent) {
+    // 关键:阻止冒泡到 li 的 onClick(否则会先触发 switchSession)
+    e.stopPropagation();
+    const session = sessions.find((s) => s.id === id);
+    const title = session?.title || id.slice(0, 8) + "…";
+    if (!confirm(`确定要删除会话「${title}」吗?该操作不可恢复。`)) return;
+
+    if (id === activeId) {
+      abortInFlight();
+      setActiveId(null);
+      setMessages([]);
+      setPendingInterrupt(null);
+      setSending(false);
+    }
+    await api.deleteSession(id);
+    await refreshSessions();
+  }
+
   async function handleSend(resumeInterrupt?: { id: string; reason: string }) {
     const text = input.trim();
     if (!text || !activeId || sending) return;
@@ -73,6 +106,10 @@ export default function App() {
     setPendingInterrupt(null);
     setMessages((prev) => [...prev, { role: "user", content: text }]);
     setSending(true);
+
+    // 八股 08 §1:为本次请求建独立 AbortController,登记到 ref 供切换/删除时停掉
+    const ctl = new AbortController();
+    streamCtrlRef.current = ctl;
 
     let assistantContent = "";
     const toolCalls: Array<{ name: string; status: "running" | "done" }> = [];
@@ -100,6 +137,7 @@ export default function App() {
         activeId!,
         text,
         resume,
+        ctl.signal,
       )) {
         switch (event.type) {
           case "TEXT_MESSAGE_CONTENT": {
@@ -203,15 +241,19 @@ export default function App() {
       }
       await refreshSessions();
     } catch (e) {
-      setMessages((prev) => {
-        const next = [...prev];
-        next[next.length - 1] = {
-          role: "assistant",
-          content: `[请求失败] ${(e as Error).message}`,
-        };
-        return next;
-      });
+      // 用户切换/删除会话主动 abort 走这里,不算错误,直接吞掉
+      if ((e as Error).name !== "AbortError") {
+        setMessages((prev) => {
+          const next = [...prev];
+          next[next.length - 1] = {
+            role: "assistant",
+            content: `[请求失败] ${(e as Error).message}`,
+          };
+          return next;
+        });
+      }
     } finally {
+      if (streamCtrlRef.current === ctl) streamCtrlRef.current = null;
       setSending(false);
     }
   }
@@ -236,6 +278,10 @@ export default function App() {
     setPendingInterrupt(null);
     setMessages((prev) => [...prev, { role: "user", content: option }]);
     setSending(true);
+
+    // 同 handleSend:独立 AbortController 注册到 ref,切走时可断流
+    const ctl = new AbortController();
+    streamCtrlRef.current = ctl;
 
     let assistantContent = "";
     const toolCalls: Array<{ name: string; status: "running" | "done" }> = [];
@@ -262,6 +308,7 @@ export default function App() {
           activeId!,
           option,
           resume,
+          ctl.signal,
         )) {
           switch (event.type) {
             case "TEXT_MESSAGE_CONTENT": {
@@ -363,15 +410,18 @@ export default function App() {
         }
         await refreshSessions();
       } catch (e) {
-        setMessages((prev) => {
-          const next = [...prev];
-          next[next.length - 1] = {
-            role: "assistant",
-            content: `[请求失败] ${(e as Error).message}`,
-          };
-          return next;
-        });
+        if ((e as Error).name !== "AbortError") {
+          setMessages((prev) => {
+            const next = [...prev];
+            next[next.length - 1] = {
+              role: "assistant",
+              content: `[请求失败] ${(e as Error).message}`,
+            };
+            return next;
+          });
+        }
       } finally {
+        if (streamCtrlRef.current === ctl) streamCtrlRef.current = null;
         setSending(false);
       }
     })();
@@ -410,6 +460,14 @@ export default function App() {
                   {new Date(s.createdAt).toLocaleDateString()}
                 </span>
               </span>
+              <button
+                className="session-delete"
+                onClick={(e) => handleDeleteSession(s.id, e)}
+                title="删除会话"
+                aria-label="删除会话"
+              >
+                ×
+              </button>
             </li>
           ))}
         </ul>

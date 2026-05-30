@@ -4,7 +4,10 @@
       "Bash(npx tsc *)",
       "Bash(echo \"---exit:$?---\")",
       "Bash(grep -rn *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(npx tsx *)",
+      "Bash(awk -F= '{print $1}')",
+      "Bash(env)"
     ]
   }
 }

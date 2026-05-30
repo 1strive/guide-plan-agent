@@ -61,3 +61,22 @@ req.raw.on('close', () => controller.abort())
 
 ### 自检
 提交前快速 grep 一遍:对当前 commit 涉及的每个 Task,是否在代码里能 `grep "Task X.Y"` 找到对应实现?如果找不到,补上头注释。
+
+## 架构文档同步规则(强制)
+
+`docs/04-架构文档/agent-架构.md` 是描述后端运转流程的**活文档**,以下改动**必须**回去核对相关章节:
+
+| 改了什么 | 必须检查的章节 |
+|---------|--------------|
+| 新增/删除 HTTP 路由(`src/index.ts`) | §2 API 一览 + §3 对应小节 + §1.1 分层图 |
+| 改 `runAgentStream` / `postChatStream` / LLM 调用 | §3.2.2 ReAct 主循环 + §4.2 AG-UI 事件 + §4.3 Token 链路 |
+| 改 `src/agent/prompts/` 目录(新版本、新 section) | §4.1 messages 拼接顺序 |
+| 改 `src/agent/tools.ts`(新工具、改 schema) | §1.2 模块职责 + §3.2.2 |
+| 改 abort / 中断行为 | §3.3 中断处理 + §5.5 + §6 局限表 |
+| 改 `chat_sessions` / `chat_messages` schema | §3.4/§3.5 + §1.2 + §6 |
+| 落地某个规划 Task | §6 局限表标记移除 + 必要时新增决策小节到 §5 |
+| 引入新模块(`eval/`、`rag/`、`agents/`、`mcp/` 等) | §1.1 分层图 + §1.2 职责表 |
+
+详细的"何时该改"对照见 [`docs/04-架构文档/agent-架构.md` §7 维护清单](./docs/04-架构文档/agent-架构.md#7-维护清单本文档应当何时更新)。
+
+**提交前自检**:涉及上述改动的 commit / PR,应在描述里说明已同步更新的章节;若本次确实不需更新,也请明示「无需更新」以表明已核对过。

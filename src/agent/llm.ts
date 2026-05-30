@@ -19,7 +19,7 @@ import {
   createToolCallEnd,
   createToolCallResult,
   createInterrupt
-} from './ag-ui.js'
+} from './ag-ui.js' //NOTE: 在runAgentStream中进行的openAI返回Chunks到ag-ui协议的转义
 import { type TokenUsage, accumulateUsage, estimateTokens } from './token-usage.js'
 
 export type { TokenUsage }

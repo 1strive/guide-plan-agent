@@ -97,3 +97,11 @@ export async function insertMessage(
     [sessionId, role, content]
   )
 }
+
+/**
+ * 八股:05-记忆系统.md §3.2.2 CRUD「删」
+ * chat_messages 通过 FK ON DELETE CASCADE 自动级联清理(见 001_init.sql:36)
+ */
+export async function deleteSession(pool: DbPool, id: string): Promise<void> {
+  await pool.query('DELETE FROM chat_sessions WHERE id = ?', [id])
+}

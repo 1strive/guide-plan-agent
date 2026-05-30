@@ -9,10 +9,11 @@ import path from 'node:path'
 import pino from 'pino'
 import { loadConfig } from './config.js'
 import { createPool } from './db/pool.js'
-import { createSession, insertMessage, listRecentMessages, sessionExists, listSessions, getSessionMessages, updateSessionTitle, updateSessionTokens } from './db/chatRepo.js'
-import { SYSTEM_PROMPT } from './agent/prompts.js'
+import { createSession, deleteSession, insertMessage, listRecentMessages, sessionExists, listSessions, getSessionMessages, updateSessionTitle, updateSessionTokens } from './db/chatRepo.js'
+import { getPrompt } from './agent/prompts/index.js'
 import { runAgentStream, type ChatMessage, type ResumeItem, type TokenUsage } from './agent/llm.js'
 import { EventType, type RunFinishedEvent } from './agent/ag-ui.js'
+import { detectInjection, wrapUntrusted, detectSystemLeak } from './agent/sanitize.js'
 
 function createLogger() {
   const logsDir = path.resolve('logs')
@@ -73,6 +74,28 @@ async function main() {
   })
 
   /**
+   * 八股:05-记忆系统.md §3.2.2 CRUD「删」
+   * - 用户可控的会话级硬删除;messages 由 FK CASCADE 级联清理
+   * - 当前阶段1 Chat App 心智:前端在删除当前激活会话前会自己 abort 正在跑的 SSE
+   *   (web/src/App.tsx handleDeleteSession),客户端连接关闭即触发上面 stream 路由
+   *   的 req.raw 'close' 钩子,把 agent run 也停掉 —— 故本路由无需额外终止 in-flight stream。
+   * - Task 4.5 重构为 Run-as-Resource 后,这里需要联动 runManager.cancel(runId)
+   */
+  app.delete<{ Params: { id: string } }>(
+    '/sessions/:id',
+    async (req, reply) => {
+      const exists = await sessionExists(pool, req.params.id)
+      if (!exists) {
+        reply.status(404)
+        return { error: 'session not found' }
+      }
+      await deleteSession(pool, req.params.id)
+      reply.status(204)
+      return null
+    }
+  )
+
+  /**
    * POST /sessions/:id/stream — Agent 流式对话入口
    *
    * 规划：Task 1.1 流式输出 + Task 1.2 token 计数 + 阶段5 Task 5.3 可观测
@@ -88,7 +111,7 @@ async function main() {
    * - reqLog：child logger 绑定 runId，串联整次请求所有日志，对应阶段4/5 的 trace_id 需求
    * - updateSessionTokens：把累计 token 持久化到 chat_sessions，便于按会话维度做成本审计
    */
-  app.post<{ Params: { id: string }; Body: { message?: string; threadId?: string; runId?: string; resume?: ResumeItem[] } }>(
+  app.post<{ Params: { id: string }; Body: { message?: string; threadId?: string; runId?: string; resume?: ResumeItem[]; promptVersion?: string } }>(
     '/sessions/:id/stream',
     async (req, reply) => {
       const sessionId = req.params.id
@@ -96,6 +119,9 @@ async function main() {
       const threadId = req.body?.threadId ?? sessionId
       const runId = req.body?.runId ?? randomUUID()
       const resume = req.body?.resume as ResumeItem[] | undefined
+      // Task 2.2:请求级 promptVersion 可覆盖全局 config,便于评测脚本按 case 切版本;
+      // 不传时回落到 config.PROMPT_VERSION,保证生产请求有默认值兜底
+      const promptVersion = req.body?.promptVersion ?? config.PROMPT_VERSION
 
       if (!message) {
         reply.status(400)
@@ -110,13 +136,49 @@ async function main() {
       // trace_id：把 runId 绑到日志上下文，所有后续日志自动带 runId 字段
       const reqLog = req.log.child({ runId, threadId, sessionId })
 
+      // 八股 09 §8.3 #1 输入清洗:入口检测 Prompt 注入。
+      // 策略(见 docs/04-架构文档/agent-架构.md §5.6):命中不拒绝请求,
+      // 仅记录日志 + 把消息用 <untrusted_user_content> 包裹,让模型自己按 securityRules 拒绝
+      const injection = detectInjection(message)
+      if (injection.matched) {
+        reqLog.warn(
+          { patterns: injection.patterns, severity: injection.severity, messagePreview: message.slice(0, 80) },
+          'prompt injection detected'
+        )
+      }
+
+      // DB 存原始消息(审计/历史回放需要看真实输入)
       await insertMessage(pool, sessionId, 'user', message)
       const history = await listRecentMessages(pool, sessionId, config.CHAT_HISTORY_LIMIT)
 
-      const msgs: ChatMessage[] = [{ role: 'system', content: SYSTEM_PROMPT }]
+      // Task 2.1:从注册表取当前版本的 system + Few-shot prepend;
+      // Task 4.3 后这里会传入 { summary, userProfile } 之类的插值变量
+      const prompt = getPrompt(promptVersion)
+      reqLog.info({ promptVersion }, 'using prompt version')
+      const msgs: ChatMessage[] = [{ role: 'system', content: prompt.system }]
+      // Task 2.2 / 八股 09 §3.5:Few-shot 示例以 user/assistant 对话形式注入,排在历史之前
+      for (const m of prompt.prependMessages) {
+        if (m.role === 'user') {
+          msgs.push({ role: 'user', content: m.content })
+        } else {
+          msgs.push({ role: 'assistant', content: m.content })
+        }
+      }
       for (const h of history) {
         if (h.role === 'user' || h.role === 'assistant') {
           msgs.push({ role: h.role, content: h.content })
+        }
+      }
+
+      // 八股 09 §8.3 #2 边界标记:命中注入时,把"当前 user 消息"在喂给 LLM 前包裹
+      // (DB 里仍是原始消息;不包裹历史里的旧消息——旧攻击假定已经被防御过)
+      if (injection.matched) {
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i]
+          if (m && m.role === 'user' && m.content === message) {
+            msgs[i] = { role: 'user', content: wrapUntrusted(message) }
+            break
+          }
         }
       }
 
@@ -183,6 +245,19 @@ async function main() {
       } finally {
         clearInterval(heartbeat)
         req.raw.off('close', onClose)
+      }
+
+      // 八股 09 §8.3 #5 输出过滤:检测最终回答是否泄露 system prompt 特征句。
+      // 命中只告警不修改输出——避免过度干预正常回答(prompt 防御指令本身就要求模型拒绝)
+      const finalText = interruptMessage || fullContent
+      if (finalText) {
+        const leak = detectSystemLeak(finalText, prompt.system)
+        if (leak.matched) {
+          reqLog.warn(
+            { leakedFragments: leak.leakedFragments, outputPreview: finalText.slice(0, 120) },
+            'system prompt leak detected in output'
+          )
+        }
       }
 
       // 仅在客户端未断开时才落库：abort 场景下文本可能不完整，存了反而污染历史
