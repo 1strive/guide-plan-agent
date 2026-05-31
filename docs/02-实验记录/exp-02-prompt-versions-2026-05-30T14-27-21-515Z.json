@@ -1,0 +1,75 @@
+{
+  "ranAt": "2026-05-30T14:27:21.515Z",
+  "model": "MiniMax-M2.7",
+  "temperature": 0.4,
+  "topP": 1,
+  "versions": [
+    "v1_base"
+  ],
+  "summary": {
+    "v1_base": {
+      "total": 2,
+      "passed": 2,
+      "failed": 0,
+      "knownFail": 0,
+      "hardFailRate": 0
+    }
+  },
+  "details": [
+    {
+      "caseId": "ask-01",
+      "promptVersion": "v1_base",
+      "passed": true,
+      "checks": {
+        "tool": null,
+        "keywords": true,
+        "clarification": true,
+        "refused": null
+      },
+      "actual": {
+        "tools": [],
+        "text": "<think>用户又说\"推荐个地方\"，这是新的一轮对话。用户没有提供任何额外信息（地区/预算/时间/偏好），根据反问规则，我必须先反问用户补充关键信息。\n\n这次我不应该假设用户还是从上海出发或者想要自然风光——虽然上一轮有这些信息，但根据说明，开头几轮可能是教学示例，真正需要回应的以最末一条 user 消息为准。最末一条用户消息只是说\"推荐个地方\"，没有上下文。\n\n所以我需要重新询问用户的偏好和基本信息。\n</think>\n\n[ASK_USER]\n好的,先帮我了解一下您的基本情况:\n【选项】\n1. 您在哪个城市?\n2. 计划什么时候出行?\n3. 偏好什么类型的旅行?",
+        "tokens": 1530,
+        "durationMs": 8543
+      },
+      "expected": {
+        "shouldClarify": true,
+        "keywords": [
+          "[ASK_USER]",
+          "【选项】"
+        ]
+      }
+    },
+    {
+      "caseId": "detail-01",
+      "promptVersion": "v1_base",
+      "passed": true,
+      "checks": {
+        "tool": true,
+        "keywords": true,
+        "clarification": true,
+        "refused": null
+      },
+      "actual": {
+        "tools": [
+          "get_destination_detail",
+          "search_destinations",
+          "get_destination_detail"
+        ],
+        "text": "<think>用户现在问的是\"丽江有什么代表性的美食?\"，这是想了解丽江的美食信息。\n\n根据规则，当用户要求\"列举\"某地的具体美食时，我必须调用 get_destination_detail 从数据库读取事实，禁止凭空编造条目。\n\n我需要先调用 get_destination_detail 获取丽江的详细信息，然后从中提取美食相关的内容来回答用户的问题。\n\n但是用户的问题中并没有提供丽江的目的地 id，我需要先确认丽江在数据库中的 id。通常丽江古城的 id 可能是已知的，或者我可以通过其他方式获取。\n\n让我调用 get_destination_detail，假设丽江的 id 为某个常见值。但根据工具定义，destination_id 是必需参数，我需要知道具体的 id。\n\n实际上，用户在说\"其中第一个能再详细说说吗?\"时，我应该先问清楚用户指的是哪个目的地。但现在用户直接问丽江，说明用户可能已经知道是丽江了。\n\n我应该调用 get_destination_detail 来获取丽江的详细信息。但问题是我不知道丽江的具体 destination_id。\n\n让我重新审视对话：\n1. 用户要求推荐周末去的地方\n2. 我问用户从哪个城市出发\n3. 用户说从上海出发，3天时间，想看自然风光，不要太累\n\n\n4. 我调用了 semantic_search_travel 做语义检索\n5. 用户问\"其中第一个能再详细说说吗?\"\n6. 我问用户关心哪类详情\n7. 用户选\"全部\"或直接问\"丽江有什么代表性的美食?\"\n\n用户现在明确问丽江的美食。根据工具使用规则，我需要调用 get_destination_detail 来获取详细信息。但我需要知道丽江的 destination_id。\n\n根据数据库设计，目的地应该有对应的 id。让我假设丽江古城的 id 为 8（这是一个常见假设），然后调用 get_destination_detail 获取美食信息。\n\n根据之前的上下文，系统返回的结果中包含\"大理\"和\"丽江\"等目的地，其中\"丽江\"出现在第2个位置。这表明用户可能想了解丽江的信息。虽然我在上一步询问了用户关心哪类详情，但用户直接跳到了问丽江的美食，这表明用户已经明确目标。我需要继续调用 get_destination_detail 来获取丽江的具体数据。\n\n由于用户询问的是丽江的美食，我应该使用 destination_id=8（假设值）来调用该工具。\n</think>\n\n好的，我查询一下丽江的详细信息。\n<think>数据库里没有 id=8 的目的地。我之前说\"比如江浙附近的莫干山、千岛湖\"时,并不知道它们在数据库里的实际 id,所以我应该用 semantic_search_travel 做一次语义检索,看看用户想要的\"自然风光、轻松\"目的地数据库里有哪些,然后针对具体目的地再查详情。\n\n不过用户现在问的是\"丽江有什么代表性的美食\",丽江在数据库里可能存在也可能不存在。让我先 search_destinations 搜索一下丽江。\n</think>\n\n\n<think>找到了丽江,id是26。现在调用get_destination_detail获取详细信息。\n</think>\n\n\n<think>好的，成功获取了丽江的详细信息。现在我可以回答用户关于丽江代表性美食的问题了。数据库中显示了两种美食：腊排骨火锅和鸡豆凉粉。我来介绍一下。\n</think>\n\n丽江的代表性美食有:\n\n**腊排骨火锅** — 本地特色锅物,口味相对温和可调整,是来丽江必尝的特色菜。\n\n**鸡豆凉粉** — 古城常见的小吃,适合轻食搭配,清爽可口。\n\n这两道菜在丽江古城内都很容易找到,腊排骨火锅推荐去忠义市场附近的本地餐厅,更地道。\n\n(来源:丽江)",
+        "tokens": 6845,
+        "durationMs": 30424
+      },
+      "expected": {
+        "tools": [
+          "get_destination_detail",
+          "search_destinations"
+        ],
+        "shouldClarify": false,
+        "keywords": [
+          "丽江"
+        ]
+      }
+    }
+  ]
+}

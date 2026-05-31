@@ -48,12 +48,24 @@ export type RunFinishedOutcome =
     | { type: 'success' }
     | { type: 'interrupt'; interrupts: Interrupt[] }
 
+// Task 3.5:RAG 溯源源单元;每一条对应一个被工具引用过的目的地,
+// 前端可据此渲染"信息来源"链接/标签
+export type Source = {
+    destinationId: number
+    destinationName: string
+    region: string
+    // 召回方式标记:从哪个工具/策略来的(便于审计 + 排查"为什么推这个目的地")
+    via: 'search_destinations' | 'get_destination_detail' | 'semantic_search_travel'
+}
+
 export type RunFinishedEvent = BaseEvent & {
     type: EventType.RUN_FINISHED
     threadId: string
     runId: string
     outcome?: RunFinishedOutcome
     usage?: TokenUsage
+    // Task 3.5:本次 Run 引用过的所有目的地来源(已按 destinationId 去重)
+    sources?: Source[]
 }
 
 export type RunErrorEvent = BaseEvent & {
@@ -142,9 +154,10 @@ export function createRunFinished(
     threadId: string,
     runId: string,
     outcome?: RunFinishedOutcome,
-    usage?: TokenUsage
+    usage?: TokenUsage,
+    sources?: Source[]
 ): RunFinishedEvent {
-    return { type: EventType.RUN_FINISHED, threadId, runId, outcome, usage, timestamp: ts() }
+    return { type: EventType.RUN_FINISHED, threadId, runId, outcome, usage, sources, timestamp: ts() }
 }
 
 export function createInterrupt(

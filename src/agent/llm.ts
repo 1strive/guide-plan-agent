@@ -6,6 +6,7 @@ import {
   EventType,
   type AgUiEvent,
   type RunFinishedOutcome,
+  type Source,
   createRunStarted,
   createRunFinished,
   createRunError,
@@ -238,6 +239,8 @@ export async function* runAgentStream(
   let current: ChatMessage[] = [...messages]
   const signal = options?.signal
   let totalUsage: TokenUsage | null = null
+  // Task 3.5:跨多轮工具调用聚合 sources(同 destinationId 取首次出现,via 保留首次的工具)
+  const sourceMap = new Map<number, Source>()
 
   try {
     for (let round = 0; round < config.LLM_MAX_TOOL_ROUNDS; round++) {
@@ -390,6 +393,12 @@ export async function* runAgentStream(
             for (const id of result.referencedDestinationIds) {
               referenced.add(id)
             }
+            // Task 3.5:聚合 source(以 destinationId 去重,保留首次记录的 via)
+            if (result.sources) {
+              for (const s of result.sources) {
+                if (!sourceMap.has(s.destinationId)) sourceMap.set(s.destinationId, s)
+              }
+            }
             yield createStepStarted('tool_execution')
             yield createToolCallResult(tc.id, result.text)
             yield createStepFinished('tool_execution')
@@ -420,7 +429,7 @@ export async function* runAgentStream(
           metadata: askResult.options.length > 0 ? { options: askResult.options } : undefined
         })
         const outcome: RunFinishedOutcome = { type: 'interrupt', interrupts: [interrupt] }
-        yield createRunFinished(threadId, runId, outcome, totalUsage ?? undefined)
+        yield createRunFinished(threadId, runId, outcome, totalUsage ?? undefined, Array.from(sourceMap.values()))
         return
       }
 
@@ -431,5 +440,5 @@ export async function* runAgentStream(
     yield createRunError(String(err), 'AGENT_ERROR')
   }
 
-  yield createRunFinished(threadId, runId, undefined, totalUsage ?? undefined)
+  yield createRunFinished(threadId, runId, undefined, totalUsage ?? undefined, Array.from(sourceMap.values()))
 }

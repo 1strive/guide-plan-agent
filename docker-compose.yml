@@ -16,5 +16,18 @@ services:
       retries: 30
       start_period: 20s
 
+  # 阶段3 Task 3.2:Chroma 向量数据库,HNSW 索引内置,跟 chromadb JS client 配套
+  chroma:
+    image: chromadb/chroma:latest
+    ports:
+      - '8000:8000'
+    volumes:
+      - chroma_data:/data
+    environment:
+      IS_PERSISTENT: 'TRUE'
+      PERSIST_DIRECTORY: /data
+      ANONYMIZED_TELEMETRY: 'FALSE'
+
 volumes:
   guide_data:
+  chroma_data:

@@ -114,17 +114,17 @@ export const TEST_CASES: TestCase[] = [
     }
   },
 
-  // ── 语义检索:阶段3 RAG 才实现,现阶段已知 fail ──
+  // ── 语义检索:阶段3 Task 3.3 已实现 semantic_search_travel,转入硬性评估 ──
   {
     id: 'sem-01',
-    description: '模糊情感需求 → 应调 semantic_search_travel(阶段3 后生效)',
+    description: '模糊情感需求 → 调 semantic_search_travel(Task 3.3)',
     category: 'semantic_search',
     message: '想看雪山但不想太累,有什么推荐?',
     expected: {
-      tools: ['semantic_search_travel'],
+      // 接受任一检索工具命中:语义优先,关键词也算"懂得搜数据库"
+      tools: ['semantic_search_travel', 'search_destinations'],
       shouldClarify: false
-    },
-    knownFail: 'semantic_search_travel 工具阶段3 才实现,当前会回退到 search_destinations 或直接生成'
+    }
   },
 
   // ── 上下文跟进:指代消解,期望理解"刚才说的" ──

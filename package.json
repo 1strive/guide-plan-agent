@@ -8,6 +8,8 @@
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "setup": "docker compose up -d && tsx scripts/migrate.ts && tsx scripts/seed.ts",
+    "index": "tsx scripts/index-vectors.ts",
+    "eval:rag": "tsx scripts/eval-rag.ts",
     "web:dev": "cd web && npm run dev",
     "eval": "tsx scripts/eval-prompt.ts",
     "eval:base": "tsx scripts/eval-prompt.ts --version v1_base",
@@ -20,6 +22,7 @@
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",
+    "chromadb": "^3.4.3",
     "dotenv": "^17.4.2",
     "fastify": "^5.2.0",
     "mysql2": "^3.11.5",

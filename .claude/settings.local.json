@@ -8,7 +8,9 @@
       "Bash(npx tsx *)",
       "Bash(awk -F= '{print $1}')",
       "Bash(env)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(python3 -c \"import json,sys;d=json.load\\(sys.stdin\\);r=d['details'][0];print\\('tools  :',r['actual']['tools']\\);print\\('text   :',r['actual']['text'][:200]\\)\")",
+      "Bash(python3 -c ' *)"
     ]
   }
 }
