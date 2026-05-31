@@ -4,9 +4,9 @@
 >
 > **本文档是活文档**——核心模块改动后必须回到 §7「维护清单」核对相关章节是否要同步更新。
 >
-> **当前对齐的开发阶段**:阶段2 已完成,**阶段3 RAG 已完成**(Chroma 向量库 + Embedder 多 provider + semantic_search_travel 工具 + RRF 混合检索 + 溯源 sources 字段)。
+> **当前对齐的开发阶段**:阶段2 已完成,阶段3 RAG 主体已完成(Chroma + Embedder 多 provider + semantic_search_travel + RRF + sources),**整合阶段 Task 整合-1 已完成**(主 Agent 切到 LangGraph 主线)。
 >
-> **最近更新**:2026-05-30(阶段3 落地:`src/rag/` 模块 + Chroma 容器 + `semantic_search_travel` 工具 + hybrid 检索 Top-1 召回率 +16.7%(`exp-04`) + AG-UI RunFinished 新增 sources 字段)
+> **最近更新**:2026-05-31(Task 整合-1:主 Agent 从手写 `runAgentStream` 切到 `langchain.createAgent`;新增 `src/agent/langgraph-agent.ts` + `langgraphToAgUi.ts` adapter;`src/agent/llm.ts` 瘦身为只导出类型,手写实现全删;`src/eval/runner.ts` 同步切 LangGraph;Node 18.16 polyfill 加 `globalThis.crypto` + `AbortSignal.any`;AG-UI 协议 0 改动、前端 0 改动)
 
 ---
 
@@ -93,7 +93,9 @@
 |------|------|------|----------|
 | HTTP 层 | `src/index.ts` | 路由、SSE 生命周期、abort 钩子、日志 trace_id、token 持久化 | 不写 LLM 调用细节、不解析 SSE 协议 |
 | Prompts | `src/agent/prompts/` | section 化模板、版本注册、渲染插值、Few-shot prepend | 不知道 LLM 怎么调、不接 DB |
-| Agent 核心 | `src/agent/llm.ts` | postChatStream(LLM SSE 解析)、runAgentStream(ReAct 主循环)、`[ASK_USER]` 检测、Token 统计 | 不写 DB、不接前端 |
+| **Agent 主线**(Task 整合-1) | `src/agent/langgraph-agent.ts` | `runLangGraphAgent`:`langchain.createAgent` + `MemorySaver` + 工具 wrap;**当前 HTTP handler 调用的就是这个** | 不写 DB、不解析 SSE 协议(LangGraph 内部干) |
+| **Agent 事件 Adapter** | `src/agent/langgraphToAgUi.ts` | 把 LangGraph `streamEvents v2` 翻译成项目原生 AG-UI 事件;[ASK_USER] 检测;sources 注入 RUN_FINISHED | 不知道工具细节 |
+| Agent 共用类型 | `src/agent/llm.ts` | 只导出 `ChatMessage` / `ResumeItem` / `TokenUsage` 类型;**整合-1 后手写实现全部删除** | 不含任何业务逻辑 |
 | Tools | `src/agent/tools.ts` | function calling 定义、工具实现、参数 zod 校验 | 不发 SSE 事件、不调 LLM |
 | AG-UI 协议 | `src/agent/ag-ui.ts` | 事件类型枚举 + 构造器(RUN_STARTED / TEXT_MESSAGE_* / TOOL_CALL_* / RUN_FINISHED) | 不含业务逻辑 |
 | Sanitize 安全 | `src/agent/sanitize.ts` | `detectInjection` 入口注入检测 / `wrapUntrusted` 边界标记 / `detectSystemLeak` 出口泄露检测(纯函数) | 不发日志、不修改输入,只返回判定结果 |
@@ -640,6 +642,23 @@ OpenAI 兼容协议默认**流式响应不返回 usage**。不声明就拿不到
 
 完整决策见 `docs/开发规划.md` 关键设计决策 #2、`docs/03-开发笔记/note-03 §3.1`。
 
+### 5.9 为什么主 Agent 切到 LangGraph(Task 整合-1)★
+
+整合阶段做的决策:阶段3 完成后,真实使用反馈出"会话续流"需求(切走 Run 不停、回来续订),手写实现成本约 Task 4.5 完整复杂度;而 LangGraph 的 `thread_id` + `Checkpointer` 是现成的,**接框架的成本远低于手写**——所以决定整合-1 把主 Agent 切到 LangGraph,整合-2 借 Checkpointer 做轻量续流。
+
+具体落地选择:
+- 用 `langchain.createAgent`(LangChain 1.x 推荐 API,旧 `@langchain/langgraph/prebuilt:createReactAgent` 标 deprecated)
+- `MemorySaver` 作 Checkpointer(开发用,Task 4.5 升级 SqliteSaver/MySQLSaver)
+- 工具复用 `tools.ts:runTool`,用闭包 wrap 成 LangChain tool(sources 通过闭包 sourceMap 旁路透出)
+- `[ASK_USER]` 协议保留(整合-2 / Task 4.5 再升级原生 `interrupt()`)
+- AG-UI 事件协议 0 改动(adapter 层翻译 LangGraph `streamEvents v2`)
+
+保留资产:
+- 手写 `runAgentStream` / `postChatStream` 等**直接删除**,`src/agent/llm.ts` 瘦身为只导出 3 个类型(理由:留死代码会腐烂);"手写 vs LangGraph 对比" STAR 故事写在 `docs/03-开发笔记/note-04`
+- AG-UI 协议、tools.ts、sanitize.ts、prompts/、sources/ 全部复用
+
+完整决策见 `docs/开发规划.md` 关键设计决策 #6、`docs/03-开发笔记/note-04`(待写)。
+
 ### 5.8 为什么 Embedder 抽象成多 Provider(而不是直连 MiniMax)★
 
 阶段3 实施时碰到了一个非常真实的工程问题:**MiniMax 当前账号无 embedding 权限**(实测 `embo-01` 返回 `your current token plan not support model, embo-01`)。
@@ -679,7 +698,7 @@ export interface Embedder {
 
 | 局限 | 当前症状 | 修复 Task | 备注 |
 |------|---------|----------|------|
-| 切走会话 = 任务终止 | 切换会话或网络抖动,Run 被 abort,assistant 输出丢失 | **Task 4.5** Run 持久化与续流 | 阶段4 核心改造,最复杂 |
+| 切走会话 = 任务终止 | 切换会话或网络抖动,Run 被 abort,assistant 输出丢失 | **整合-2**(轻量版,即将做)+ **Task 4.5**(完整版) | 整合-1 已切 LangGraph 主线 → Checkpointer 现成,整合-2 借力做轻量续流 |
 | 无主动取消按钮 | 用户只能切走/关页面,不能"立刻停" | Task 4.5 | 需要新增 POST /sessions/:id/runs/:runId/cancel |
 | `[ASK_USER]` 是字符串协议 | 模型偶尔会忘记加前缀;且无法附带结构化 schema | Task 4.5 引入 LangGraph 风格 interrupt | 见 §5.4 |
 | 评测无重试 | LLM 服务抖动时单次评测 fail,不可信 | Task 5.3 容错与重试 | 见 exp-02 第 2 轮事故 |
@@ -710,6 +729,7 @@ export interface Embedder {
 | 引入新模块(eval/、rag/、agents/) | §1.1 分层图 + §1.2 职责表 |
 | 改 sanitize.ts 规则库 / 检测策略 | §1.2 模块职责 + §3.2 时序图入口节点 + §5.6 决策 + §6 局限表注入检测条目 |
 | 改 src/rag/(chunker / embedder / vectorStore / hybridSearch) | §1.2 模块职责 + §6 局限表 RAG 相关条目;若改了 AG-UI 事件结构(如 sources)同步 §4.2 |
+| 改 langgraph-agent.ts / langgraphToAgUi.ts(整合-1 后) | §1.2 模块表 Agent 主线 + §5.9 LangGraph 切换决策;若新事件类型同步 §4.2 |
 | 改 .env 的 EMBEDDING_PROVIDER / CHROMA_* | §6 局限表 embedding 行;不影响时序图 |
 
 **维护铁律**:任何 PR 涉及上述变更,**必须在 PR 描述里勾选已更新本文档的章节**。Claude Code 接手开发时,提交前应回到本文档自检。

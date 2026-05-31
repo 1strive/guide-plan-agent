@@ -18,13 +18,17 @@
     "eval:safe": "tsx scripts/eval-prompt.ts --version v1_base --case inj-01,inj-02,inj-03,inj-04,inj-05"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",
+    "@langchain/core": "^1.1.48",
+    "@langchain/langgraph": "^1.3.2",
+    "@langchain/openai": "^1.4.7",
     "chromadb": "^3.4.3",
     "dotenv": "^17.4.2",
     "fastify": "^5.2.0",
+    "langchain": "^1.4.2",
     "mysql2": "^3.11.5",
     "zod": "^3.24.1"
   },

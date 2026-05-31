@@ -16,7 +16,9 @@
 import { randomUUID } from 'node:crypto'
 import type { AppConfig } from '../config.js'
 import type { DbPool } from '../db/pool.js'
-import { runAgentStream, type ChatMessage } from '../agent/llm.js'
+import { type ChatMessage } from '../agent/llm.js'
+// Task 整合-1:评测也走 LangGraph 主线,跟生产路径一致(原 runAgentStream 已删)
+import { runLangGraphAgent } from '../agent/langgraph-agent.js'
 import { getPrompt } from '../agent/prompts/index.js'
 import { detectSystemLeak } from '../agent/sanitize.js'
 import {
@@ -88,7 +90,7 @@ export async function runForEval(
   }
 
   try {
-    for await (const event of runAgentStream(
+    for await (const event of runLangGraphAgent(
       pool,
       config,
       msgs,

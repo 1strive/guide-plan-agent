@@ -11,7 +11,9 @@ import { loadConfig } from './config.js'
 import { createPool } from './db/pool.js'
 import { createSession, deleteSession, insertMessage, listRecentMessages, sessionExists, listSessions, getSessionMessages, updateSessionTitle, updateSessionTokens } from './db/chatRepo.js'
 import { getPrompt } from './agent/prompts/index.js'
-import { runAgentStream, type ChatMessage, type ResumeItem, type TokenUsage } from './agent/llm.js'
+import { type ChatMessage, type ResumeItem, type TokenUsage } from './agent/llm.js'
+// Task 整合-1:主线切到 LangGraph;手写 runAgentStream 退役但代码保留(@deprecated)
+import { runLangGraphAgent } from './agent/langgraph-agent.js'
 import { EventType, type RunFinishedEvent } from './agent/ag-ui.js'
 import { detectInjection, wrapUntrusted, detectSystemLeak } from './agent/sanitize.js'
 
@@ -224,7 +226,8 @@ async function main() {
       let interruptMessage = ''
       let runError: unknown = null
       try {
-        for await (const event of runAgentStream(
+        // Task 整合-1:主路径走 LangGraph;事件协议由 langgraphToAgUi 翻译回 AG-UI
+        for await (const event of runLangGraphAgent(
           pool, config, msgs, threadId, runId, resume,
           { signal: ctl.signal, onUsage }
         )) {
