@@ -5,31 +5,21 @@ import {
   listFeaturesByDestination,
   searchDestinations
 } from '../db/destinationRepo.js'
-import { createVectorStore, type VectorStore } from '../rag/vectorStore.js'
-import type { ChunkCategory } from '../rag/types.js'
 import { detectInjection, wrapUntrusted } from './sanitize.js'
+import { buildCacheKey, getCached, setCached } from './webSearchCache.js'
 
 
-export type ToolSource = {
-  destinationId: number
-  destinationName: string
-  region: string
-  via: 'search_destinations' | 'get_destination_detail' | 'semantic_search_travel'
-}
+// Task 3.5 + 3.7:工具返回的 source(union,跟 ag-ui.ts:Source 对齐)
+// destination:SQL 工具命中的目的地
+// url:web_search 命中的 URL
+import type { DestinationSource, UrlSource } from './ag-ui.js'
+export type ToolSource = DestinationSource | UrlSource
 
 export type ToolRunResult = {
   text: string
   referencedDestinationIds: number[]
-  // Task 3.5:工具调用引用过的目的地来源,llm.ts 聚合后挂到 RUN_FINISHED.sources
+  // Task 3.5:工具调用引用过的目的地来源,langgraph-agent.ts 聚合后挂到 RUN_FINISHED.sources
   sources?: ToolSource[]
-}
-
-// Task 3.3:vectorStore 模块级 lazy 单例,避免每次 tool 调用都重建 Chroma client
-// 安全:Chroma client 内部是 HTTP keep-alive,多次复用更省;不存在多 config 共存场景
-let _vectorStore: VectorStore | null = null
-function getVectorStore(config: AppConfig): VectorStore {
-  if (!_vectorStore) _vectorStore = createVectorStore(config)
-  return _vectorStore
 }
 
 const definitions = [
@@ -67,22 +57,22 @@ const definitions = [
     }
   },
 
-  // Task 3.3:语义检索工具,RAG 入口
+  // Task 3.7:Tavily 联网搜索工具,突破"只覆盖 3 个目的地"的限制
   {
     type: 'function' as const,
     function: {
-      name: 'semantic_search_travel',
+      name: 'web_search',
       description:
-        '按自然语言"感觉/偏好/灵感"做向量语义检索(例如「想看雪山又不想太累」「适合带娃的慢节奏目的地」)。当用户描述模糊或难以用关键词表达时优先使用此工具。',
+        '通过联网搜索回答**实时信息**(开园时间、活动、价格、当前天气、新闻等)或**数据库未覆盖的目的地**(目前数据库只有成都/丽江/哈尔滨,其他城市都需要 web_search)。返回 url + title + snippet 列表。',
       parameters: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: '自然语言需求描述' },
-          topK: { type: 'integer', description: '返回 Top-K 条结果', default: 5 },
-          category: {
+          query: { type: 'string', description: '搜索查询,推荐使用准确的中文表达' },
+          max_results: { type: 'integer', description: '返回结果上限', default: 5 },
+          search_depth: {
             type: 'string',
-            enum: ['summary', 'food', 'scenery', 'culture'],
-            description: '可选:仅检索某一类内容(摘要/美食/美景/文化)'
+            enum: ['basic', 'advanced'],
+            description: 'basic 快、advanced 更深(默认 basic)'
           }
         },
         required: ['query']
@@ -98,7 +88,7 @@ export function getToolDefinitions() {
 type ToolArgs =
   | { name: 'search_destinations'; args: { query: string; region?: string; limit?: number } }
   | { name: 'get_destination_detail'; args: { destination_id: number } }
-  | { name: 'semantic_search_travel'; args: { query: string; topK?: number; category?: ChunkCategory } }
+  | { name: 'web_search'; args: { query: string; max_results?: number; search_depth?: 'basic' | 'advanced' } }
 
 function parseArgs(name: string, raw: string): ToolArgs {
   const j = JSON.parse(raw) as Record<string, unknown>
@@ -122,15 +112,14 @@ function parseArgs(name: string, raw: string): ToolArgs {
       args: { destination_id }
     }
   }
-  if (name === 'semantic_search_travel') {
-    const cat = j.category != null ? String(j.category) : undefined
-    const validCats: ChunkCategory[] = ['summary', 'food', 'scenery', 'culture']
+  if (name === 'web_search') {
+    const depth = j.search_depth != null ? String(j.search_depth) : 'basic'
     return {
       name,
       args: {
         query: String(j.query ?? ''),
-        topK: j.topK != null ? Number(j.topK) : 5,
-        category: cat && (validCats as string[]).includes(cat) ? (cat as ChunkCategory) : undefined
+        max_results: j.max_results != null ? Number(j.max_results) : 5,
+        search_depth: depth === 'advanced' ? 'advanced' : 'basic'
       }
     }
   }
@@ -164,58 +153,12 @@ export async function runTool(
       }),
       referencedDestinationIds: ids,
       sources: rows.map((r) => ({
+        type: 'destination' as const,
         destinationId: r.id,
         destinationName: r.name,
         region: r.region,
         via: 'search_destinations' as const
       }))
-    }
-  }
-  if (parsed.name === 'semantic_search_travel') {
-    // Task 3.3:语义检索 → Chroma 取 Top-K chunk
-    const topK = Math.min(Math.max(parsed.args.topK ?? 5, 1), 20)
-    const filter = parsed.args.category ? { category: parsed.args.category } : undefined
-    const results = await getVectorStore(config).query(parsed.args.query, topK, filter)
-
-    // 阶段2 §5.6 / note-02 §5.6 留下的 RAG 间接注入防御要求:
-    // 检索回来的 chunk 文本也可能含恶意指令(网页/文档来源),命中则用 <untrusted_user_content> 包裹
-    // 当前数据来自自家 seed,理论上不会命中——但代码必须就位,等阶段3 接外部源时直接生效
-    const safeChunks = results.map((r) => {
-      const inj = detectInjection(r.text)
-      return {
-        id: r.id,
-        destinationId: r.metadata.destinationId,
-        destinationName: r.metadata.destinationName,
-        region: r.metadata.region,
-        category: r.metadata.category,
-        distance: Number(r.distance.toFixed(4)),
-        text: inj.matched ? wrapUntrusted(r.text) : r.text,
-        // 命中时挂个标记,Task 3.5 溯源时可以提示用户"该来源已隔离"
-        injectionDetected: inj.matched ? inj.severity : undefined
-      }
-    })
-
-    const refIds = Array.from(new Set(results.map((r) => r.metadata.destinationId)))
-    // 按 destinationId 去重收集 source(每个目的地只算一次,即使被多个 chunk 命中)
-    const seenIds = new Set<number>()
-    const sources: ToolSource[] = []
-    for (const r of results) {
-      if (seenIds.has(r.metadata.destinationId)) continue
-      seenIds.add(r.metadata.destinationId)
-      sources.push({
-        destinationId: r.metadata.destinationId,
-        destinationName: r.metadata.destinationName,
-        region: r.metadata.region,
-        via: 'semantic_search_travel'
-      })
-    }
-    return {
-      text: JSON.stringify({
-        query: parsed.args.query,
-        chunks: safeChunks
-      }),
-      referencedDestinationIds: refIds,
-      sources
     }
   }
   if (parsed.name === 'get_destination_detail') {
@@ -248,6 +191,7 @@ export async function runTool(
       }),
       referencedDestinationIds: [dest.id],
       sources: [{
+        type: 'destination' as const,
         destinationId: dest.id,
         destinationName: dest.name,
         region: dest.region,
@@ -255,5 +199,98 @@ export async function runTool(
       }]
     }
   }
+  if (parsed.name === 'web_search') {
+    return runWebSearch(pool, config, parsed.args)
+  }
   throw new Error(`unknown tool: ${name}`)
+}
+
+// ─── Task 3.7:web_search 实现 ───────────────────────────────────
+
+type TavilyResult = {
+  url: string
+  title: string
+  content: string
+  score?: number
+}
+
+type TavilyResponse = {
+  query: string
+  results: TavilyResult[]
+  answer?: string
+}
+
+async function runWebSearch(
+  pool: DbPool,
+  config: AppConfig,
+  args: { query: string; max_results?: number; search_depth?: 'basic' | 'advanced' }
+): Promise<ToolRunResult> {
+  // 无 key 友好降级:返回明确的"未配置"消息,模型可据此回退到其他工具或如实告知用户
+  if (!config.TAVILY_API_KEY) {
+    return {
+      text: JSON.stringify({
+        error: 'TAVILY_API_KEY 未配置,联网搜索不可用。请改用 search_destinations,或如实告知用户"目前无法联网查实时信息"。'
+      }),
+      referencedDestinationIds: [],
+      sources: []
+    }
+  }
+
+  const maxResults = Math.min(Math.max(args.max_results ?? 5, 1), 10)
+  const depth: 'basic' | 'advanced' = args.search_depth ?? 'basic'
+  const cacheKey = buildCacheKey(args.query, depth)
+
+  // 缓存优先(TTL 24h 默认)
+  let response = (await getCached(pool, cacheKey, config.WEB_SEARCH_CACHE_TTL_SECONDS)) as TavilyResponse | null
+  if (!response) {
+    const { tavily } = await import('@tavily/core')
+    const client = tavily({ apiKey: config.TAVILY_API_KEY })
+    try {
+      response = (await client.search(args.query, {
+        maxResults,
+        searchDepth: depth
+      })) as TavilyResponse
+      await setCached(pool, cacheKey, response).catch(() => {
+        /* 缓存写失败不阻塞主流程 */
+      })
+    } catch (err) {
+      return {
+        text: JSON.stringify({ error: `web_search failed: ${String(err)}` }),
+        referencedDestinationIds: [],
+        sources: []
+      }
+    }
+  }
+
+  // 间接注入防御:每条 snippet 走 detectInjection,命中则用 <untrusted_user_content> 包裹
+  // (网页是高危源,这是阶段2 §5.6 + Task 3.3 的伏笔正式生效之处)
+  const results = response.results.slice(0, maxResults)
+  const safeResults = results.map((r) => {
+    const text = r.content || r.title
+    const inj = detectInjection(text)
+    return {
+      url: r.url,
+      title: r.title,
+      snippet: inj.matched ? wrapUntrusted(text) : text,
+      injectionDetected: inj.matched ? inj.severity : undefined
+    }
+  })
+
+  const sources: ToolSource[] = results.map((r) => ({
+    type: 'url' as const,
+    url: r.url,
+    title: r.title,
+    snippet: r.content?.slice(0, 200),
+    via: 'web_search' as const
+  }))
+
+  return {
+    text: JSON.stringify({
+      query: args.query,
+      answer: response.answer,
+      results: safeResults
+    }),
+    referencedDestinationIds: [],
+    sources
+  }
 }

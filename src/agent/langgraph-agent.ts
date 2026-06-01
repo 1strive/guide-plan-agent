@@ -34,15 +34,22 @@ import { translateLangGraphStream } from './langgraphToAgUi.js'
 const checkpointer = new MemorySaver()
 
 // ─── 工具 wrap:把现有 runTool 包成 LangChain tool ──────────────
-function buildTools(pool: DbPool, config: AppConfig, sourceMap: Map<number, Source>) {
+// Source 去重 key:destination 用 dest-id,url 用 url-地址
+// (Task 3.7 后 ToolSource 变 union,不能直接用 destinationId 当 key)
+function sourceKey(s: Source): string {
+  return s.type === 'destination' ? `dest-${s.destinationId}` : `url-${s.url}`
+}
+
+function buildTools(pool: DbPool, config: AppConfig, sourceMap: Map<string, Source>) {
   const wrap = <S extends z.ZodTypeAny>(name: string, schema: S, description: string) =>
     tool(
       async (input: z.infer<S>): Promise<string> => {
         const result = await runTool(pool, config, name, JSON.stringify(input))
-        // sources 透传:工具调用引用过的目的地,跨多轮去重(保留首次 via)
+        // sources 透传:跨多轮去重(同 destinationId/url 保留首次 via)
         if (result.sources) {
           for (const s of result.sources) {
-            if (!sourceMap.has(s.destinationId)) sourceMap.set(s.destinationId, s)
+            const key = sourceKey(s)
+            if (!sourceMap.has(key)) sourceMap.set(key, s)
           }
         }
         // LangChain tool 只接受 string return(给 LLM 看);sources 通过闭包旁路传出
@@ -68,17 +75,15 @@ function buildTools(pool: DbPool, config: AppConfig, sourceMap: Map<number, Sour
       }),
       '读取某一目的地的结构化详情,并枚举美食、美景、文化条目。列举事实时必须调用。'
     ),
+    // Task 3.7:Tavily 联网搜索
     wrap(
-      'semantic_search_travel',
+      'web_search',
       z.object({
-        query: z.string().describe('自然语言需求描述'),
-        topK: z.number().int().optional().default(5).describe('返回 Top-K 条结果'),
-        category: z
-          .enum(['summary', 'food', 'scenery', 'culture'])
-          .optional()
-          .describe('可选:仅检索某一类内容')
+        query: z.string().describe('搜索查询,推荐使用准确的中文表达'),
+        max_results: z.number().int().optional().default(5),
+        search_depth: z.enum(['basic', 'advanced']).optional()
       }),
-      '按自然语言"感觉/偏好/灵感"做向量语义检索(例如「想看雪山又不想太累」)。当用户描述模糊或难以用关键词表达时优先使用此工具。'
+      '通过联网搜索回答**实时信息**(开园时间、活动、价格、当前天气、新闻等)或**数据库未覆盖的目的地**(目前数据库只有成都/丽江/哈尔滨,其他城市都需要 web_search)。返回 url + title + snippet 列表。'
     )
   ]
 }
@@ -113,7 +118,7 @@ export async function* runLangGraphAgent(
     onUsage?: (usage: TokenUsage, round: number) => void
   }
 ): AsyncGenerator<AgUiEvent> {
-  const sourceMap = new Map<number, Source>()
+  const sourceMap = new Map<string, Source>()
   const tools = buildTools(pool, config, sourceMap)
   const model = buildChatModel(config)
 

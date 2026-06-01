@@ -9,13 +9,24 @@ import path from 'node:path'
 import pino from 'pino'
 import { loadConfig } from './config.js'
 import { createPool } from './db/pool.js'
-import { createSession, deleteSession, insertMessage, listRecentMessages, sessionExists, listSessions, getSessionMessages, updateSessionTitle, updateSessionTokens } from './db/chatRepo.js'
+import {
+  createSession,
+  deleteSession,
+  insertMessage,
+  listRecentMessages,
+  sessionExists,
+  listSessions,
+  getSessionMessages,
+  getSessionStatus,
+  updateSessionTitle
+} from './db/chatRepo.js'
 import { getPrompt } from './agent/prompts/index.js'
-import { type ChatMessage, type ResumeItem, type TokenUsage } from './agent/llm.js'
-// Task 整合-1:主线切到 LangGraph;手写 runAgentStream 退役但代码保留(@deprecated)
-import { runLangGraphAgent } from './agent/langgraph-agent.js'
-import { EventType, type RunFinishedEvent } from './agent/ag-ui.js'
+import { type ChatMessage } from './agent/llm.js'
 import { detectInjection, wrapUntrusted, detectSystemLeak } from './agent/sanitize.js'
+import { RunManager } from './agent/runManager.js'
+import { getRunById, queryEventsAfter } from './db/runRepo.js'
+import type { AgUiEvent } from './agent/ag-ui.js'
+import { EventType, type RunFinishedEvent, type TextMessageContentEvent } from './agent/ag-ui.js'
 
 function createLogger() {
   const logsDir = path.resolve('logs')
@@ -40,6 +51,10 @@ async function main() {
 
   await app.register(cors, { origin: true })
 
+  // Task 整合-2:进程内 Run 注册表;cleanupOnStartup 清理上次残留的 running 状态
+  const runManager = new RunManager(pool, config, app.log)
+  await runManager.cleanupOnStartup()
+
   app.get('/health', async (_req, reply) => {
     try {
       await pool.query('SELECT 1')
@@ -55,6 +70,7 @@ async function main() {
     return { sessions }
   })
 
+  // Task 整合-2:返回 status 字段;running 时前端据此发起续订
   app.get<{ Params: { id: string } }>(
     '/sessions/:id/messages',
     async (req, reply) => {
@@ -64,7 +80,8 @@ async function main() {
         return { error: 'session not found' }
       }
       const messages = await getSessionMessages(pool, req.params.id)
-      return { messages }
+      const status = (await getSessionStatus(pool, req.params.id)) ?? 'end'
+      return { messages, status }
     }
   )
 
@@ -77,11 +94,8 @@ async function main() {
 
   /**
    * 八股:05-记忆系统.md §3.2.2 CRUD「删」
-   * - 用户可控的会话级硬删除;messages 由 FK CASCADE 级联清理
-   * - 当前阶段1 Chat App 心智:前端在删除当前激活会话前会自己 abort 正在跑的 SSE
-   *   (web/src/App.tsx handleDeleteSession),客户端连接关闭即触发上面 stream 路由
-   *   的 req.raw 'close' 钩子,把 agent run 也停掉 —— 故本路由无需额外终止 in-flight stream。
-   * - Task 4.5 重构为 Run-as-Resource 后,这里需要联动 runManager.cancel(runId)
+   * - 用户可控的会话级硬删除;messages / agent_runs / agent_run_events 由 FK CASCADE 级联清理
+   * - 整合-2:若会话有活跃 Run 应先 cancel(避免内存里 RunHandle 引用已删 session)
    */
   app.delete<{ Params: { id: string } }>(
     '/sessions/:id',
@@ -91,219 +105,264 @@ async function main() {
         reply.status(404)
         return { error: 'session not found' }
       }
+      // 整合-2:若有活跃 Run,先 cancel
+      const active = await runManager.getActiveBySession(req.params.id)
+      if (active) await runManager.cancel(active.runId)
       await deleteSession(pool, req.params.id)
       reply.status(204)
       return null
     }
   )
 
-  /**
-   * POST /sessions/:id/stream — Agent 流式对话入口
-   *
-   * 规划：Task 1.1 流式输出 + Task 1.2 token 计数 + 阶段5 Task 5.3 可观测
-   * 八股：
-   * - 08-工程化实践.md §1 容错（超时/abort）/ §2 Token 成本 / §3 全链路可观测（trace_id）
-   * - 09-Prompt工程.md §2.4 推理参数
-   *
-   * 实现要点：
-   * - reply.hijack()：交给 raw 流之后绕过 Fastify 默认收尾，由本 handler 全权管理写入与关闭
-   * - AbortController：req close → abort，下游 fetch 立即停止；避免客户端断开后空跑烧 token
-   * - SSE 心跳：每 15s 发送注释行 `: ping`，防止反向代理在长工具执行时按 idle 超时断连
-   * - usage 累加 + 计价：聚合每轮 LLM 的 prompt/completion tokens，按 MODEL_PRICE_*_PER_1K 估算 cost_usd
-   * - reqLog：child logger 绑定 runId，串联整次请求所有日志，对应阶段4/5 的 trace_id 需求
-   * - updateSessionTokens：把累计 token 持久化到 chat_sessions，便于按会话维度做成本审计
-   */
-  app.post<{ Params: { id: string }; Body: { message?: string; threadId?: string; runId?: string; resume?: ResumeItem[]; promptVersion?: string } }>(
-    '/sessions/:id/stream',
-    async (req, reply) => {
-      const sessionId = req.params.id
-      const message = req.body?.message?.trim()
-      const threadId = req.body?.threadId ?? sessionId
-      const runId = req.body?.runId ?? randomUUID()
-      const resume = req.body?.resume as ResumeItem[] | undefined
-      // Task 2.2:请求级 promptVersion 可覆盖全局 config,便于评测脚本按 case 切版本;
-      // 不传时回落到 config.PROMPT_VERSION,保证生产请求有默认值兜底
-      const promptVersion = req.body?.promptVersion ?? config.PROMPT_VERSION
+  // ── Task 整合-2:Run-as-Resource 新路由 ──────────────────────────────
 
-      if (!message) {
-        reply.status(400)
-        return { error: 'message required' }
-      }
-      const exists = await sessionExists(pool, sessionId)
+  /**
+   * GET /sessions/:id/runs/active
+   * 前端打开会话时调用;返回最近未完成的 Run 元数据(供续订)
+   */
+  app.get<{ Params: { id: string } }>(
+    '/sessions/:id/runs/active',
+    async (req, reply) => {
+      const exists = await sessionExists(pool, req.params.id)
       if (!exists) {
         reply.status(404)
         return { error: 'session not found' }
       }
+      const active = await runManager.getActiveBySession(req.params.id)
+      return { active }
+    }
+  )
 
-      // trace_id：把 runId 绑到日志上下文，所有后续日志自动带 runId 字段
-      const reqLog = req.log.child({ runId, threadId, sessionId })
-
-      // 八股 09 §8.3 #1 输入清洗:入口检测 Prompt 注入。
-      // 策略(见 docs/04-架构文档/agent-架构.md §5.6):命中不拒绝请求,
-      // 仅记录日志 + 把消息用 <untrusted_user_content> 包裹,让模型自己按 securityRules 拒绝
-      const injection = detectInjection(message)
-      if (injection.matched) {
-        reqLog.warn(
-          { patterns: injection.patterns, severity: injection.severity, messagePreview: message.slice(0, 80) },
-          'prompt injection detected'
-        )
+  /**
+   * POST /sessions/:id/runs/:runId/cancel
+   * 用户主动停止 Run;202 Accepted + 幂等
+   */
+  app.post<{ Params: { id: string; runId: string } }>(
+    '/sessions/:id/runs/:runId/cancel',
+    async (req, reply) => {
+      const run = await getRunById(pool, req.params.runId)
+      if (!run || run.sessionId !== req.params.id) {
+        reply.status(404)
+        return { error: 'run not found' }
       }
+      const cancelled = await runManager.cancel(req.params.runId)
+      reply.status(202)
+      return { cancelled }
+    }
+  )
 
-      // DB 存原始消息(审计/历史回放需要看真实输入)
-      await insertMessage(pool, sessionId, 'user', message)
-      const history = await listRecentMessages(pool, sessionId, config.CHAT_HISTORY_LIMIT)
+  /**
+   * GET /sessions/:id/runs/:runId/stream?after_seq=N
+   * 续订接口:先回放 seq > N 的历史事件,再接实时流(若 Run 仍活跃)
+   * 若 Run 已结束,只回放历史并立即关流
+   */
+  app.get<{
+    Params: { id: string; runId: string }
+    Querystring: { after_seq?: string }
+  }>('/sessions/:id/runs/:runId/stream', async (req, reply) => {
+    const run = await getRunById(pool, req.params.runId)
+    if (!run || run.sessionId !== req.params.id) {
+      reply.status(404)
+      return { error: 'run not found' }
+    }
+    const afterSeq = Number(req.query.after_seq ?? 0) || 0
 
-      // Task 2.1:从注册表取当前版本的 system + Few-shot prepend;
-      // Task 4.3 后这里会传入 { summary, userProfile } 之类的插值变量
-      const prompt = getPrompt(promptVersion)
-      reqLog.info({ promptVersion }, 'using prompt version')
-      const msgs: ChatMessage[] = [{ role: 'system', content: prompt.system }]
-      // Task 2.2 / 八股 09 §3.5:Few-shot 示例以 user/assistant 对话形式注入,排在历史之前
-      for (const m of prompt.prependMessages) {
-        if (m.role === 'user') {
-          msgs.push({ role: 'user', content: m.content })
-        } else {
-          msgs.push({ role: 'assistant', content: m.content })
-        }
-      }
-      for (const h of history) {
-        if (h.role === 'user' || h.role === 'assistant') {
-          msgs.push({ role: h.role, content: h.content })
-        }
-      }
-
-      // 八股 09 §8.3 #2 边界标记:命中注入时,把"当前 user 消息"在喂给 LLM 前包裹
-      // (DB 里仍是原始消息;不包裹历史里的旧消息——旧攻击假定已经被防御过)
-      if (injection.matched) {
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          const m = msgs[i]
-          if (m && m.role === 'user' && m.content === message) {
-            msgs[i] = { role: 'user', content: wrapUntrusted(message) }
-            break
-          }
-        }
-      }
-
-      // 接管底层 socket，自行管理 SSE 生命周期
-      reply.hijack()
-      reply.raw.writeHead(200, {
-        'Content-Type': 'text/event-stream; charset=utf-8',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-        'X-Accel-Buffering': 'no',
-        'X-Trace-Id': runId
-      })
-
-      // ── 客户端断开 → abort 全链路 ───────────────────────────
-      const ctl = new AbortController()
-      const onClose = () => {
-        if (!ctl.signal.aborted) {
-          reqLog.info('client closed stream, aborting agent run')
-          ctl.abort()
-        }
-      }
-      req.raw.once('close', onClose)
-
-      // ── SSE 心跳：每 15s 发注释行，防止网关 idle 断连 ────────
-      const heartbeat = setInterval(() => {
-        try { reply.raw.write(': ping\n\n') } catch { /* socket 已关 */ }
-      }, 15_000)
-
-      // ── token 用量累加 + 成本估算 ──────────────────────────
-      const totalUsage: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
-      const startedAt = Date.now()
-      const onUsage = (u: TokenUsage, round: number) => {
-        totalUsage.promptTokens += u.promptTokens
-        totalUsage.completionTokens += u.completionTokens
-        totalUsage.totalTokens += u.totalTokens
-        reqLog.info(
-          { round, usage: u, model: config.OPENAI_MODEL },
-          'llm round usage'
-        )
-      }
-
-      let fullContent = ''
-      let interruptMessage = ''
-      let runError: unknown = null
+    reply.hijack()
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      'X-Trace-Id': req.params.runId
+    })
+    const heartbeat = setInterval(() => {
       try {
-        // Task 整合-1:主路径走 LangGraph;事件协议由 langgraphToAgUi 翻译回 AG-UI
-        for await (const event of runLangGraphAgent(
-          pool, config, msgs, threadId, runId, resume,
-          { signal: ctl.signal, onUsage }
-        )) {
-          if (event.type === EventType.TEXT_MESSAGE_CONTENT) {
-            fullContent += (event as { delta: string }).delta
-          }
-          if (event.type === EventType.RUN_FINISHED) {
-            const finished = event as RunFinishedEvent
-            if (finished.outcome?.type === 'interrupt') {
-              interruptMessage = finished.outcome.interrupts[0]?.message ?? ''
-            }
-          }
-          reply.raw.write(`data: ${JSON.stringify(event)}\n\n`)
-        }
-      } catch (err) {
-        runError = err
-        reqLog.error({ err }, 'agent stream failed')
-      } finally {
-        clearInterval(heartbeat)
-        req.raw.off('close', onClose)
+        reply.raw.write(': ping\n\n')
+      } catch {
+        /* socket 已关 */
       }
+    }, 15_000)
 
-      // 八股 09 §8.3 #5 输出过滤:检测最终回答是否泄露 system prompt 特征句。
-      // 命中只告警不修改输出——避免过度干预正常回答(prompt 防御指令本身就要求模型拒绝)
+    const unsubscribe = await runManager.subscribe(
+      req.params.runId,
+      (event) => writeSseEvent(reply, event),
+      () => {
+        clearInterval(heartbeat)
+        try {
+          reply.raw.end()
+        } catch {
+          /* ignore */
+        }
+      },
+      afterSeq
+    )
+
+    req.raw.once('close', () => {
+      unsubscribe()
+      clearInterval(heartbeat)
+      req.log.info(
+        { runId: req.params.runId },
+        'resume subscriber disconnected (run continues if active)'
+      )
+    })
+  })
+
+  /**
+   * POST /sessions/:id/stream — Agent 流式对话入口(整合-2 重构版)
+   *
+   * 跟旧版本的核心差异:
+   * - 不再 yield agent stream + 自己管 abort + 自己落库
+   * - 改为:启动 runManager.start → subscribe → 把事件 SSE 转发给当前请求
+   * - 客户端断开 = unsubscribe(不 abort Run),Run 在 runManager 内继续跑、持续写库
+   * - assistant 消息落库 / token 累加 / Run 状态机推进全由 runManager 内部处理
+   *
+   * 规划:整合阶段 Task 整合-2(完整版,吸收原 Task 4.5)
+   * 八股:08-工程化实践.md §1 容错 / §3 全链路可观测;02-核心框架.md Run-as-Resource
+   */
+  app.post<{
+    Params: { id: string }
+    Body: { message?: string; promptVersion?: string }
+  }>('/sessions/:id/stream', async (req, reply) => {
+    const sessionId = req.params.id
+    const message = req.body?.message?.trim()
+    const promptVersion = req.body?.promptVersion ?? config.PROMPT_VERSION
+
+    if (!message) {
+      reply.status(400)
+      return { error: 'message required' }
+    }
+    if (!(await sessionExists(pool, sessionId))) {
+      reply.status(404)
+      return { error: 'session not found' }
+    }
+
+    const reqLog = req.log.child({ sessionId })
+
+    // 八股 09 §8.3 #1 输入清洗:入口检测 Prompt 注入(策略见 agent-架构.md §5.6)
+    const injection = detectInjection(message)
+    if (injection.matched) {
+      reqLog.warn(
+        {
+          patterns: injection.patterns,
+          severity: injection.severity,
+          messagePreview: message.slice(0, 80)
+        },
+        'prompt injection detected'
+      )
+    }
+
+    // 持久化 user 消息(原始),首条自动生成 title
+    await insertMessage(pool, sessionId, 'user', message)
+    const history = await listRecentMessages(pool, sessionId, config.CHAT_HISTORY_LIMIT)
+    if (history.filter((h) => h.role === 'user').length === 1) {
+      const title = message.length > 30 ? message.slice(0, 30) + '…' : message
+      updateSessionTitle(pool, sessionId, title).catch((err) =>
+        reqLog.error({ err }, 'updateSessionTitle failed')
+      )
+    }
+
+    // Task 2.1 + 2.2:取 prompt + Few-shot prepend
+    const prompt = getPrompt(promptVersion)
+    reqLog.info({ promptVersion }, 'using prompt version')
+    const msgs: ChatMessage[] = [{ role: 'system', content: prompt.system }]
+    for (const m of prompt.prependMessages) {
+      msgs.push(
+        m.role === 'user'
+          ? { role: 'user', content: m.content }
+          : { role: 'assistant', content: m.content }
+      )
+    }
+    for (const h of history) {
+      if (h.role === 'user' || h.role === 'assistant') {
+        msgs.push({ role: h.role, content: h.content })
+      }
+    }
+    // 八股 09 §8.3 #2 边界标记:命中注入时把当前 user 消息用 <untrusted_user_content> 包裹
+    if (injection.matched) {
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const m = msgs[i]
+        if (m && m.role === 'user' && m.content === message) {
+          msgs[i] = { role: 'user', content: wrapUntrusted(message) }
+          break
+        }
+      }
+    }
+
+    // Task 整合-2:启动 Run via runManager(不阻塞);拿到 runId 立刻可订阅
+    const runId = await runManager.start(sessionId, msgs)
+    reqLog.info({ runId }, 'run started')
+
+    // SSE 接管
+    reply.hijack()
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      'X-Trace-Id': runId
+    })
+    // 心跳防网关 idle 断连
+    const heartbeat = setInterval(() => {
+      try {
+        reply.raw.write(': ping\n\n')
+      } catch {
+        /* socket 已关 */
+      }
+    }, 15_000)
+
+    // 收集 finalText 给出口注入检测用(SSE 转发同时旁路聚合)
+    let fullContent = ''
+    let interruptMessage = ''
+    const onEvent = (event: AgUiEvent): void => {
+      if (event.type === EventType.TEXT_MESSAGE_CONTENT) {
+        fullContent += (event as TextMessageContentEvent).delta
+      } else if (event.type === EventType.RUN_FINISHED) {
+        const fin = event as RunFinishedEvent
+        if (fin.outcome?.type === 'interrupt') {
+          interruptMessage = fin.outcome.interrupts[0]?.message ?? ''
+        }
+      }
+      writeSseEvent(reply, event)
+    }
+
+    const onEnd = (): void => {
+      clearInterval(heartbeat)
+      // 出口注入检测(八股 09 §8.3 #5):命中只告警,不修改输出
       const finalText = interruptMessage || fullContent
       if (finalText) {
         const leak = detectSystemLeak(finalText, prompt.system)
         if (leak.matched) {
           reqLog.warn(
-            { leakedFragments: leak.leakedFragments, outputPreview: finalText.slice(0, 120) },
+            {
+              runId,
+              leakedFragments: leak.leakedFragments,
+              outputPreview: finalText.slice(0, 120)
+            },
             'system prompt leak detected in output'
           )
         }
       }
-
-      // 仅在客户端未断开时才落库：abort 场景下文本可能不完整，存了反而污染历史
-      if (!ctl.signal.aborted) {
-        const storedContent = interruptMessage || fullContent
-        if (storedContent) {
-          await insertMessage(pool, sessionId, 'assistant', storedContent)
-        }
-        const existing = await getSessionMessages(pool, sessionId)
-        if (existing.filter(m => m.role === 'user').length === 1) {
-          const title = message.length > 30 ? message.slice(0, 30) + '…' : message
-          await updateSessionTitle(pool, sessionId, title)
-        }
-        // Task 1.2：把本次累计 token 写回 chat_sessions，便于按会话审计成本
-        if (totalUsage.totalTokens > 0) {
-          try {
-            await updateSessionTokens(pool, sessionId, totalUsage.totalTokens)
-          } catch (err) {
-            reqLog.error({ err }, 'updateSessionTokens failed')
-          }
-        }
+      try {
+        reply.raw.end()
+      } catch {
+        /* ignore */
       }
-
-      // Task 1.2 / 八股 08 §2.5：每次请求结束输出聚合用量与成本
-      const costInput = (totalUsage.promptTokens / 1000) * config.MODEL_PRICE_INPUT_PER_1K
-      const costOutput = (totalUsage.completionTokens / 1000) * config.MODEL_PRICE_OUTPUT_PER_1K
-      reqLog.info(
-        {
-          model: config.OPENAI_MODEL,
-          usage: totalUsage,
-          cost_usd: Number((costInput + costOutput).toFixed(6)),
-          duration_ms: Date.now() - startedAt,
-          aborted: ctl.signal.aborted,
-          ok: !runError
-        },
-        'agent run summary'
-      )
-
-      try { reply.raw.end() } catch { /* 已关闭 */ }
     }
-  )
 
-  // 八股 08 §5.3：进程退出前优雅关闭，避免连接泄漏与响应中断
+    const unsubscribe = await runManager.subscribe(runId, onEvent, onEnd, 0)
+
+    // 整合-2 核心:客户端断开 = 只 unsubscribe,Run 在后台继续跑、持续写库
+    req.raw.once('close', () => {
+      unsubscribe()
+      clearInterval(heartbeat)
+      reqLog.info(
+        { runId },
+        'client unsubscribed (run continues in background, persistence ongoing)'
+      )
+    })
+  })
+
+  // 八股 08 §5.3:进程退出前优雅关闭
   const shutdown = async (signal: string) => {
     app.log.info({ signal }, 'shutting down')
     try {
@@ -320,6 +379,18 @@ async function main() {
 
   await app.listen({ port: config.PORT, host: '0.0.0.0' })
 }
+
+// SSE 单事件写入 helper;吞 socket 已关异常
+function writeSseEvent(reply: import('fastify').FastifyReply, event: unknown): void {
+  try {
+    reply.raw.write(`data: ${JSON.stringify(event)}\n\n`)
+  } catch {
+    /* socket closed */
+  }
+}
+
+// 未使用但保留导出供未来扩展:精细查询事件回放(测试用)
+void queryEventsAfter
 
 main().catch((err) => {
   console.error(err)

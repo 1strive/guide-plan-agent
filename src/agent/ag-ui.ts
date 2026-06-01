@@ -48,15 +48,26 @@ export type RunFinishedOutcome =
     | { type: 'success' }
     | { type: 'interrupt'; interrupts: Interrupt[] }
 
-// Task 3.5:RAG 溯源源单元;每一条对应一个被工具引用过的目的地,
-// 前端可据此渲染"信息来源"链接/标签
-export type Source = {
+// Task 3.5 + 3.7:SQL / 联网检索的来源标签;前端按 type 渲染不同 UI
+//   - destination 类型:跳到目的地详情(SQL 工具)
+//   - url 类型:可点击链接(web_search 工具 / Task 3.7)
+export type DestinationSource = {
+    type: 'destination'
     destinationId: number
     destinationName: string
     region: string
-    // 召回方式标记:从哪个工具/策略来的(便于审计 + 排查"为什么推这个目的地")
-    via: 'search_destinations' | 'get_destination_detail' | 'semantic_search_travel'
+    via: 'search_destinations' | 'get_destination_detail'
 }
+
+export type UrlSource = {
+    type: 'url'
+    url: string
+    title: string
+    snippet?: string
+    via: 'web_search'
+}
+
+export type Source = DestinationSource | UrlSource
 
 export type RunFinishedEvent = BaseEvent & {
     type: EventType.RUN_FINISHED

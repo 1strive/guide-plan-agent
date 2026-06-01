@@ -105,3 +105,63 @@ export async function insertMessage(
 export async function deleteSession(pool: DbPool, id: string): Promise<void> {
   await pool.query('DELETE FROM chat_sessions WHERE id = ?', [id])
 }
+
+// ─── Task 整合-2:status 字段(简化版,'running'|'end') ────────────
+// 注:这是 chat_sessions 上的"该 session 是否有活跃 Run"快照;
+// 真正完整状态机在 agent_runs.status 上(见 src/db/runRepo.ts)
+
+export type SessionStatus = 'running' | 'end'
+
+export async function updateSessionStatus(
+  pool: DbPool,
+  sessionId: string,
+  status: SessionStatus
+): Promise<void> {
+  await pool.query('UPDATE chat_sessions SET status = ? WHERE id = ?', [status, sessionId])
+}
+
+export async function getSessionStatus(
+  pool: DbPool,
+  sessionId: string
+): Promise<SessionStatus | null> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    'SELECT status FROM chat_sessions WHERE id = ? LIMIT 1',
+    [sessionId]
+  )
+  return ((rows[0] as { status?: SessionStatus })?.status ?? null) as SessionStatus | null
+}
+
+/**
+ * 启动清理:把上次进程残留的 'running' session 全部标 'end'
+ * 跟 runRepo.markAllRunningAsFailed 配对调用
+ */
+export async function markAllSessionsAsEnd(pool: DbPool): Promise<number> {
+  const [res] = await pool.query<import('mysql2').ResultSetHeader>(
+    "UPDATE chat_sessions SET status = 'end' WHERE status = 'running'"
+  )
+  return res.affectedRows
+}
+
+/**
+ * Task 整合-2:流式中 assistant 消息**增量 UPDATE 同一行**
+ * 而不是每 token 一条 INSERT —— 避免行数爆炸,且续订时拿"已写的部分"
+ * 返回:首次写入的消息 id;调用方需保留 id 后续 update 用
+ */
+export async function insertAssistantStub(
+  pool: DbPool,
+  sessionId: string
+): Promise<number> {
+  const [res] = await pool.query<import('mysql2').ResultSetHeader>(
+    "INSERT INTO chat_messages (session_id, role, content) VALUES (?, 'assistant', '')",
+    [sessionId]
+  )
+  return res.insertId
+}
+
+export async function updateAssistantContent(
+  pool: DbPool,
+  messageId: number,
+  content: string
+): Promise<void> {
+  await pool.query('UPDATE chat_messages SET content = ? WHERE id = ?', [content, messageId])
+}

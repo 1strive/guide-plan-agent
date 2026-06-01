@@ -4,9 +4,11 @@
 >
 > **本文档是活文档**——核心模块改动后必须回到 §7「维护清单」核对相关章节是否要同步更新。
 >
-> **当前对齐的开发阶段**:阶段2 已完成,阶段3 RAG 主体已完成(Chroma + Embedder 多 provider + semantic_search_travel + RRF + sources),**整合阶段 Task 整合-1 已完成**(主 Agent 切到 LangGraph 主线)。
+> **当前对齐的开发阶段**:阶段2 已完成,**整合阶段 Task 整合-1 + 整合-2 都已完成**(LangGraph 主线 + Run-as-Resource 完整版);**Task 4.0(原 Task 3.7,web_search via Tavily)已完成**;阶段4 4.1~4.4 待启动。
 >
-> **最近更新**:2026-05-31(Task 整合-1:主 Agent 从手写 `runAgentStream` 切到 `langchain.createAgent`;新增 `src/agent/langgraph-agent.ts` + `langgraphToAgUi.ts` adapter;`src/agent/llm.ts` 瘦身为只导出类型,手写实现全删;`src/eval/runner.ts` 同步切 LangGraph;Node 18.16 polyfill 加 `globalThis.crypto` + `AbortSignal.any`;AG-UI 协议 0 改动、前端 0 改动)
+> **重大决策(2026-06-01)**:**原阶段3 RAG 主体已废弃** —— 完整实现过(Task 3.1~3.6:chunker / Embedder × 4 / Chroma / RRF + lexical rerank / Xenova ONNX),实测后判定不适合旅游场景的实时性需求,改由阶段4 通过 MCP/Skills 实时调用外部工具(Tavily、高德地图、和风天气等)实现"动态 RAG"。本次提交清空 `src/rag/`、Chroma 容器、chromadb / `@xenova/transformers` 依赖;**Task 3.7 重定位为 Task 4.0**。详见 `docs/开发规划.md` 关键设计决策 #6。
+>
+> **最近更新**:2026-06-01(RAG 链路废弃 + Task 3.7 迁阶段4 4.0)。前次更新:Task 整合-2 完整版落地(`src/agent/runManager.ts` 三态 abort + 多订阅者 + `src/db/runRepo.ts` + DB migration 003 + `chat_sessions.status` + 3 个新 HTTP 路由 `/runs/active` / `/runs/:runId/stream?after_seq=N` / `POST /runs/:runId/cancel` + 前端「停止」按钮 + 切走自动续订;Node 20+ 后 polyfill 已删,加 `.nvmrc=22` + `engines.node>=20`)。
 
 ---
 
@@ -42,49 +44,40 @@
                                   │
         ┌─────────────────────────┼──────────────────────────────┐
         ▼                         ▼                              ▼
-┌──────────────┐         ┌────────────────┐         ┌─────────────────────┐
-│  Prompts     │         │   Agent 核心   │         │   Tools 层          │
-│  (prompts/)  │         │   (llm.ts)     │         │  (tools.ts)         │
-│              │         │                │         │                     │
-│ v1_base.ts   │ system  │ runAgentStream │  tool   │ search_destinations │
-│ v2_cot.ts    │────────>│  ReAct 多轮    │────────>│ get_destination_*   │
-│ render.ts    │         │  AbortSignal   │         │ semantic_search_*  ★│
-│ index.ts     │         │  Token 累加    │         └────────┬────────────┘
-│ (注册表)     │         │  AG-UI 事件流  │                  │
-└──────────────┘         │  sources 聚合 ★│                  │
-                         └────────┬───────┘                  │
-                                  │                          │
-                                  ▼                          ▼
-                         ┌────────────────┐       ┌────────────────────────┐
-                         │  LLM Provider  │       │  RAG 层 (src/rag/) ★  │
-                         │  postChatStream│       │                        │
-                         │  SSE 解析      │       │  vectorStore.query()   │
-                         │  超时控制      │       │      │                 │
-                         └────────────────┘       │      ▼                 │
-                                                  │  ChromaVectorStore     │
-                                                  │   + Embedder           │
-                                                  │   (minimax/openai/     │
-                                                  │    deterministic)      │
-                                                  │      │                 │
-                                                  │      ▼                 │
-                                                  │  Chroma 容器(8000)★  │
-                                                  │   destinations_v1      │
-                                                  │   18 vectors + HNSW    │
-                                                  └──────────┬─────────────┘
-                                                             │
-                                                             ▼
-                                                  ┌────────────────────────┐
-                                                  │   MySQL Pool           │
-                                                  │   (db/pool.ts,3307)   │
-                                                  │                        │
-                                                  │   chat_sessions        │
-                                                  │   chat_messages        │
-                                                  │   destinations(源)    │
-                                                  │   destination_features │
-                                                  └────────────────────────┘
-
-★ 阶段3 新增。RAG 数据流:MySQL(真理) → npm run index → Chroma(索引衍生物)
-                       查询路径:tools.ts:semantic_search_travel → vectorStore.query → Chroma HNSW
+┌──────────────┐    ┌─────────────────────┐    ┌─────────────────────┐
+│  Prompts     │    │   Agent 主线         │    │   Tools 层          │
+│  (prompts/)  │    │   langgraph-agent.ts │    │  (tools.ts)         │
+│              │    │   + langgraphToAgUi  │    │                     │
+│ v1_base.ts   │    │                      │    │ search_destinations │
+│ v2_cot.ts    │───>│ langchain.createAgent│───>│ get_destination_*   │
+│ render.ts    │sys │ MemorySaver Checkpt  │tool│ web_search ★         │
+│ index.ts     │    │ streamEvents v2      │    │   (Tavily, Task 4.0)│
+│ (注册表)     │    │ → AG-UI 事件         │    └────────┬────────────┘
+└──────────────┘    │ sources 聚合(union) │             │
+                    └────────┬─────────────┘             │
+                             ▼                           ▼
+                    ┌────────────────┐         ┌─────────────────────┐
+                    │  Run 管理器    │         │   外部数据源        │
+                    │  runManager.ts │         │                     │
+                    │                │         │  Tavily Search API  │
+                    │  三态 abort    │         │   (web_search)      │
+                    │  多订阅者      │         │       │             │
+                    │  事件流写库    │         │       ▼             │
+                    │      │         │         │  webSearchCache.ts  │
+                    │      ▼         │         │   SHA-256(q+depth)  │
+                    │  runRepo.ts    │         │   TTL 24h           │
+                    └────────┬───────┘         └──────────┬──────────┘
+                             │                            │
+                             ▼                            ▼
+                    ┌──────────────────────────────────────────┐
+                    │   MySQL Pool (db/pool.ts, 3307)          │
+                    │   chat_sessions / chat_messages          │
+                    │   agent_runs / agent_run_events (整合-2)  │
+                    │   web_search_cache (Task 4.0)            │
+                    │   destinations / destination_features    │
+                    │     (供 SQL 工具,Task 4.4 MCP 接入后    │
+                    │      可能整体退役;见决策 #6)             │
+                    └──────────────────────────────────────────┘
 ```
 
 ### 1.2 模块职责表
@@ -93,17 +86,15 @@
 |------|------|------|----------|
 | HTTP 层 | `src/index.ts` | 路由、SSE 生命周期、abort 钩子、日志 trace_id、token 持久化 | 不写 LLM 调用细节、不解析 SSE 协议 |
 | Prompts | `src/agent/prompts/` | section 化模板、版本注册、渲染插值、Few-shot prepend | 不知道 LLM 怎么调、不接 DB |
-| **Agent 主线**(Task 整合-1) | `src/agent/langgraph-agent.ts` | `runLangGraphAgent`:`langchain.createAgent` + `MemorySaver` + 工具 wrap;**当前 HTTP handler 调用的就是这个** | 不写 DB、不解析 SSE 协议(LangGraph 内部干) |
-| **Agent 事件 Adapter** | `src/agent/langgraphToAgUi.ts` | 把 LangGraph `streamEvents v2` 翻译成项目原生 AG-UI 事件;[ASK_USER] 检测;sources 注入 RUN_FINISHED | 不知道工具细节 |
+| **Run 管理器**(Task 整合-2) | `src/agent/runManager.ts` | 进程内 Run 注册表 + 三态 abort(per-subscriber vs per-run)+ 状态机推进 + 事件 pump(写 agent_run_events、广播 subscriber、增量写 chat_messages) | 不直接接 HTTP / LangGraph;只通过 langgraph-agent 拿事件流 |
+| **Agent 主线**(Task 整合-1) | `src/agent/langgraph-agent.ts` | `runLangGraphAgent`:`langchain.createAgent` + `MemorySaver` + 工具 wrap;**被 runManager 调用** | 不写 DB、不直接接 HTTP |
+| **Agent 事件 Adapter** | `src/agent/langgraphToAgUi.ts` | 把 LangGraph `streamEvents v2` 翻译成项目原生 AG-UI 事件;[ASK_USER] 检测;sources 聚合到 RUN_FINISHED | 不知道工具细节、不写库 |
+| **Run 仓库** | `src/db/runRepo.ts` | `agent_runs`(完整状态机)+ `agent_run_events`(seq 事件流)CRUD + `markAllRunningAsFailed`(启动清理) | 不发事件、不调 LangGraph |
 | Agent 共用类型 | `src/agent/llm.ts` | 只导出 `ChatMessage` / `ResumeItem` / `TokenUsage` 类型;**整合-1 后手写实现全部删除** | 不含任何业务逻辑 |
-| Tools | `src/agent/tools.ts` | function calling 定义、工具实现、参数 zod 校验 | 不发 SSE 事件、不调 LLM |
-| AG-UI 协议 | `src/agent/ag-ui.ts` | 事件类型枚举 + 构造器(RUN_STARTED / TEXT_MESSAGE_* / TOOL_CALL_* / RUN_FINISHED) | 不含业务逻辑 |
+| Tools | `src/agent/tools.ts` | function calling 定义、工具实现(`search_destinations` / `get_destination_detail` / **`web_search`** Task 4.0)、参数 zod 校验、间接注入防御 | 不发 SSE 事件、不调 LLM |
+| Web 搜索缓存 | `src/agent/webSearchCache.ts` | Tavily 调用结果 SHA-256(query+depth) → MySQL `web_search_cache` 表,TTL 默认 24h(`WEB_SEARCH_CACHE_TTL_SECONDS`),避免烧 Tavily 免费额度 | 不调 Tavily、不知道工具语义 |
+| AG-UI 协议 | `src/agent/ag-ui.ts` | 事件类型枚举 + 构造器(RUN_STARTED / TEXT_MESSAGE_* / TOOL_CALL_* / RUN_FINISHED);**`Source` 是 discriminated union `DestinationSource \| UrlSource`**(Task 4.0) | 不含业务逻辑 |
 | Sanitize 安全 | `src/agent/sanitize.ts` | `detectInjection` 入口注入检测 / `wrapUntrusted` 边界标记 / `detectSystemLeak` 出口泄露检测(纯函数) | 不发日志、不修改输入,只返回判定结果 |
-| RAG 类型 | `src/rag/types.ts` | Chunk / ChunkMetadata / SearchResult 类型定义 | 不含逻辑 |
-| RAG 切分 | `src/rag/chunker.ts` | `buildAllChunks` 从 destinations + destination_features 表生成 chunks | 不做 embedding、不写 Chroma |
-| RAG Embedder | `src/rag/embedder.ts` | 抽象 `Embedder` 接口 + 3 实现(minimax / openai / deterministic);`createEmbedder` 按 config 工厂 | 不依赖向量库 |
-| RAG 向量存储 | `src/rag/vectorStore.ts` | 抽象 `VectorStore` 接口 + `ChromaVectorStore` 实现;`createVectorStore` 工厂(嵌入 Embedder 到 collection 的 EmbeddingFunction) | 不解析查询语义、不知 tools/llm |
-| RAG 混合检索 | `src/rag/hybridSearch.ts` | `hybridSearchTravel(strategy)` 三策略统一入口(keyword/semantic/hybrid);RRF 融合 + lexical rerank | 不暴露为工具,供评测脚本和未来 toolAgent 调用 |
 | Token Usage | `src/agent/token-usage.ts` | `estimateTokens` 兜底估算、`accumulateUsage` 累加 | 不写 DB |
 | Chat 持久化 | `src/db/chatRepo.ts` | chat_sessions / chat_messages 的 CRUD | 不知道 LLM、不调工具 |
 | Destination 数据 | `src/db/destinationRepo.ts` | destinations / destination_features 的查询 | 不写 chat 表 |
@@ -119,9 +110,12 @@
 | GET | `/health` | — | `{ ok, db }`,503 表示 DB 挂 | `src/index.ts:40-48` |
 | GET | `/sessions` | — | `{ sessions: SessionRow[] }` | `src/index.ts:50-53` |
 | POST | `/sessions` | — | `201 { sessionId }` | `src/index.ts:68-73` |
-| GET | `/sessions/:id/messages` | `id` | `{ messages: { role, content }[] }`,404 表示不存在 | `src/index.ts:55-66` |
-| DELETE | `/sessions/:id` | `id` | `204 null`(成功)/`404`(不存在) | `src/index.ts:83-95` |
-| POST | `/sessions/:id/stream` | `{ message, threadId?, runId?, resume?, promptVersion? }` | SSE 流(`data: {AGUIEvent}\n\n`),`X-Trace-Id` 头携带 runId | `src/index.ts:113-235` |
+| GET | `/sessions/:id/messages` | `id` | `{ messages, status }`(整合-2 加 `status: 'running'\|'end'`),404 表示不存在 | `src/index.ts` GET `/messages` |
+| DELETE | `/sessions/:id` | `id` | `204 null`;整合-2 后会先 cancel 活跃 Run | `src/index.ts` DELETE `/sessions/:id` |
+| POST | `/sessions/:id/stream` | `{ message, promptVersion? }` | SSE 流;**整合-2 重构**:启动 Run + subscribe,客户端断开仅 unsubscribe(Run 在 runManager 内继续) | `src/index.ts` POST `/stream` |
+| **GET** | **`/sessions/:id/runs/active`** ★ | `id` | `{ active: AgentRunRow \| null }`,前端打开会话时调用以决定续订 | 整合-2 新增 |
+| **GET** | **`/sessions/:id/runs/:runId/stream?after_seq=N`** ★ | `id`, `runId`, `after_seq` | SSE:先回放 `seq > N` 的历史事件,Run 仍活跃时接实时流 | 整合-2 新增(续订接口) |
+| **POST** | **`/sessions/:id/runs/:runId/cancel`** ★ | `id`, `runId` | `202 { cancelled }` 主动取消,幂等 | 整合-2 新增 |
 
 ---
 
@@ -334,93 +328,19 @@ client                handler                DB
 
 **前端配合**(`web/src/App.tsx:97`):删除当前激活会话前,前端自己 abort 正在跑的 SSE 连接 → 触发 §3.3 流程,后端把 Run 也停掉。后端因此不需要专门"终止 in-flight stream"的逻辑(阶段4 Task 4.5 改造后需要联动 `runManager.cancel(runId)`)。
 
-### 3.6 RAG 检索流程(阶段3 新增)★
+### 3.6 工具调用一览(SQL × 2 + Web × 1)
 
-RAG 不是新 HTTP 路由,而是 §3.2 ReAct 主循环里"工具调用"的一种具体形态——当 LLM 在多轮里选择 `semantic_search_travel` 时触发。下图展示这条路径:
+当前 Agent 注册的工具按 `v1_base.toolUsageRules` 各管一类场景:
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant A as runAgentStream<br/>(llm.ts)
-    participant T as tools.ts<br/>(runTool 分支)
-    participant VS as ChromaVectorStore<br/>(src/rag/vectorStore.ts)
-    participant E as Embedder<br/>(deterministic 默认)
-    participant CH as Chroma 容器<br/>(localhost:8000)
-    participant S as sanitize.ts
+| 用户问题 | 模型选择 | 工具类型 | 延迟 |
+|---------|---------|---------|------|
+| "云南有什么目的地" | `search_destinations`(SQL LIKE) | MySQL | ~10ms |
+| "列举丽江的美食" | `get_destination_detail`(SQL by id) | MySQL | ~10ms |
+| "北京 2026 春节有什么活动" / "上海今天天气" | `web_search`(Tavily, Task 4.0) | 联网 | ~1-3s(缓存命中 ~10ms) |
 
-    Note over A: ReAct 第 N 轮,LLM 输出<br/>tool_call: semantic_search_travel<br/>({query, topK, category?})
+**演进路径**:Task 4.4 完成后,SQL 工具会被高德地图 / 携程等 MCP source 替代(动态 RAG);若覆盖充分,SQL 工具 + MySQL seed → MCP 整体取代,详见决策 #6。
 
-    A->>T: runTool('semantic_search_travel', args)
-    T->>T: parseArgs 校验(query/topK/category enum)
-    T->>VS: getVectorStore(config) → lazy 单例
-    T->>VS: query(text, topK, filter?)
-    VS->>CH: HTTP POST /api/v2/.../collections/destinations_v1/query<br/>{ queryTexts:[text], nResults:K, where? }
-
-    Note over CH: 内部:embeddingFunction.generate([text])<br/>→ Embedder.generate(["..."])
-    CH->>E: generate(["text..."])
-    E-->>CH: [[0.12,-0.34,...]] (128/1536 维)
-    Note over CH: HNSW 索引算 cosine 距离 → 排序
-
-    CH-->>VS: { ids:[[...]], documents:[[...]],<br/>  metadatas:[[...]], distances:[[...]] }
-    VS-->>T: SearchResult[]
-
-    loop 对每条返回 chunk
-        T->>S: detectInjection(chunk.text)<br/>(八股 09 §8 间接注入防御)
-        Note over S: 当前 self-seed 不会命中<br/>等 Task 3.7 Tavily 真触发
-        alt 命中
-            T->>T: chunk.text = wrapUntrusted(chunk.text)
-        end
-    end
-
-    T->>T: 按 destinationId 去重收集 sources
-    T-->>A: ToolRunResult { text:JSON, referencedDestinationIds, sources }
-
-    Note over A: sourceMap.set(destinationId, source)<br/>(首次出现的 via 保留)
-    Note over A: append {role:'tool', tool_call_id, content} 到 msgs<br/>下一轮 LLM 看到 tool result
-
-    A->>A: continue ReAct 多轮(可能再调 get_destination_detail 拿详情)
-```
-
-#### 3.6.1 关键不变量
-
-| 不变量 | 出处 |
-|--------|------|
-| **MySQL 是 source of truth,Chroma 是可丢弃索引** | 改 seed 必须 `npm run index` 重灌 |
-| **vectorStore 是 lazy 单例** | `tools.ts:getVectorStore()`,Chroma client 复用 HTTP keep-alive |
-| **EmbeddingFunction 走 Embedder 抽象** | `vectorStore.ts:asEmbeddingFunction()`,切 provider 业务代码 0 改动 |
-| **检索结果走 detectInjection** | 复用阶段2 §5.6 的 sanitize 模块,RAG 场景间接注入兜底 |
-| **sources 跨多轮去重** | `llm.ts` 的 sourceMap;同 destinationId 多次命中保留首次 via |
-
-#### 3.6.2 RAG 工具与 SQL 工具的协作
-
-三个工具按 `v1_base.toolUsageRules` 各管一类场景:
-
-| 用户问题 | 模型选择 | 何处 |
-|---------|---------|------|
-| "云南有什么目的地" | `search_destinations`(SQL LIKE) | 明确关键词/地区 |
-| "列举丽江的美食" | `get_destination_detail`(SQL by id) | 必调,禁止编造 |
-| "想看雪山不想太累" | **`semantic_search_travel`(RAG)** | 模糊需求兜底 |
-
-实测 `sem-01` 展示了**多工具协作链路**:
-```
-LLM Round 1: semantic_search_travel('想看雪山...')     ← 语义召回找方向
-LLM Round 2: get_destination_detail(丽江)              ← SQL 拿精确条目
-LLM Round 3: 整合生成,带 "(来源:丽江)" 溯源标签
-```
-
-#### 3.6.3 灌数据流程(脚本入口,非生产路径)
-
-`scripts/index-vectors.ts`(`npm run index`)流程,**仅在数据/embedder 变更时手动跑**:
-
-```
-1. buildAllChunks(pool)            ← MySQL → 18 chunks
-2. vectorStore.reset()             ← drop 旧 collection(防 embedder 维度冲突)
-3. vectorStore.add(chunks)         ← Chroma 自动调 embedder.generate() 批量入库
-4. vectorStore.count()             ← 校验 = 18
-5. 3 条 smoke query 看 Top-3       ← 验证 query 路径通
-```
-
-实测灌入耗时:18 chunks × deterministic = ~55ms。换 Ollama / OpenAI provider 后会更慢(网络调用)。
+> **历史说明**:本节原为 §3.6 RAG 检索流程(阶段3 Task 3.3,`semantic_search_travel`),2026-06-01 RAG 废弃后整节重写。git 历史可查原流程图。
 
 ---
 
@@ -506,81 +426,70 @@ RUN_FINISHED { usage: totalUsage }    index.ts onUsage:
 
 **Fallback 估算**:若 LLM 不返回 usage(部分 MiniMax 兼容协议),`runAgentStream` 用 `estimateTokens(text.length / 2)` 兜底——精度差但能保住成本审计链路。
 
-### 4.4 RAG 数据流(MySQL → Chroma → tool result → sources)★
+### 4.4 web_search 数据流(Task 4.0)
 
-阶段3 引入了 RAG 后,数据有两条流向。**写入流**(灌数据,手动触发):
-
-```
-scripts/seed.ts                  npm run index
-─────────────────                ──────────────
-destinations 表(3 行)
-destination_features 表(15 行)
-        │
-        │  buildAllChunks(pool)
-        ▼
-Chunk[18](text + metadata)
-        │
-        │  vectorStore.add(chunks)
-        ▼
-Chroma EmbeddingFunction.generate(texts)
-        │  调 Embedder(deterministic/openai/minimax)
-        ▼
-向量 number[][]
-        │
-        │  HNSW 索引
-        ▼
-Chroma collection: destinations_v1
-  { ids:[...], documents:[...], metadatas:[...], embeddings:[...] }
-```
-
-**查询流**(每次 LLM 调 RAG 工具时):
+当前唯一的非数据库工具,数据流向:
 
 ```
-LLM tool_call: semantic_search_travel({query, topK})
+LLM tool_call: web_search({query, max_results?, search_depth?})
         │
         ▼
-tools.ts → vectorStore.query(text, topK, filter?)
+tools.ts:runWebSearch
+        │
+        ├─ ① 无 key 降级:返回提示消息,模型回退到 SQL 或如实告知
+        │
+        ├─ ② 缓存优先:buildCacheKey = SHA-256(query + depth)
+        │     │
+        │     ▼
+        │   MySQL SELECT web_search_cache WHERE cache_key=? AND age<TTL
+        │     ├─ 命中 → 直接返回(避免烧 Tavily 额度)
+        │     └─ 未命中 → 调 Tavily
+        │           │
+        │           ▼
+        │       @tavily/core client.search(...)
+        │           │
+        │           ▼
+        │       INSERT ... ON DUPLICATE KEY UPDATE 写回缓存
+        │
+        ├─ ③ 间接注入防御:每条 snippet → detectInjection
+        │     命中 → wrapUntrusted(snippet)
+        │
+        └─ ④ sources 收集:每条 result → UrlSource { url, title, snippet, via:'web_search' }
         │
         ▼
-Chroma POST /api/v2/.../query { queryTexts:[text], nResults }
-        │  Chroma 内部调 EmbeddingFunction.generate([query])
-        ▼
-query 向量 → HNSW Top-K → 返回 chunks + distance
+ToolRunResult { text:JSON{query, answer, results}, referencedDestinationIds:[], sources }
         │
         ▼
-SearchResult[]:[ { id, text, metadata, distance }, ... ]
+langgraph-agent.ts buildTools 闭包:
+  ├── sourceKey(s) = `dest-${id}` 或 `url-${url}`(union 类型分流)
+  ├── sourceMap.set(sourceKey(s), s)
+  └── tool 返回 text 给 LLM(sources 旁路传出)
         │
         ▼
-tools.ts:
-  ├── 每条 chunk.text 走 detectInjection(防间接注入)
-  ├── 按 destinationId 去重收集 ToolSource[]
-  └── 返回 ToolRunResult { text:JSON{chunks}, referencedDestinationIds, sources }
+langgraphToAgUi.ts on_tool_end:
+  yield STEP_STARTED(tool_execution) + TOOL_CALL_RESULT + STEP_FINISHED
         │
         ▼
-llm.ts:
-  ├── sourceMap.set(destinationId, source)(跨多轮聚合)
-  ├── append { role:'tool', tool_call_id, content } 到 msgs
-  └── continue ReAct 下一轮
+流末 RUN_FINISHED { outcome, usage, sources: Array.from(sourceMap.values()) }
         │
         ▼
-最终 RUN_FINISHED 事件挂载:
-  { type:'RUN_FINISHED', outcome, usage,
-    sources:[{destinationId, destinationName, region, via}, ...] }
-        │
-        ▼
-前端 web/src/api.ts 解析 SSE,从 RUN_FINISHED.sources 渲染来源标签
+前端按 source.type 渲染:
+  - type='destination' → "信息来源:丽江"(可跳详情)
+  - type='url'         → 可点击链接(web_search 场景)
 ```
 
 #### 关键路径要素
 
 | 要素 | 出处 | 说明 |
 |------|------|------|
-| **chunk text 自带前缀** | `chunker.ts` 拼"丽江的美景「玉龙雪山」" | 让 chunk 自我描述,不依赖外部上下文 |
-| **embedder 直接当 Chroma EmbeddingFunction 用** | `vectorStore.ts:asEmbeddingFunction` | 接口完全对齐,几行 wrapper |
-| **每次 query 都重新算 query 向量** | Chroma 内置行为 | 这是 deterministic 模式下查询 1ms 的关键(无网络调用) |
-| **检索结果走 detectInjection** | `tools.ts:semantic_search_travel` 分支 | 当前 self-seed 不触发,Task 3.7 真生效 |
-| **sources 跨多轮去重** | `llm.ts:sourceMap`,保留首次 via | 同目的地被两个工具引用时,via 标记首次召回方式 |
-| **AG-UI RunFinishedEvent.sources** | `ag-ui.ts:51-65` | 前后端契约,前端按此渲染"信息来源"UI |
+| **缓存 TTL 在应用层** | `webSearchCache.ts:getCached` 用 `TIMESTAMPDIFF` 判 age | DB 不主动清,下次写入 `ON DUPLICATE KEY UPDATE` 覆盖 |
+| **lazy import @tavily/core** | `tools.ts:runWebSearch` | 无 key 时不引包,减少冷启动 |
+| **snippet 走 detectInjection** | 网页是高危源 | 阶段2 §5.6 留的"间接注入"伏笔正式生效 |
+| **Source 是 discriminated union** | `ag-ui.ts:DestinationSource \| UrlSource` | 前端按 `type` 渲染不同 UI |
+| **sourceKey 跨类型去重** | `langgraph-agent.ts:sourceKey()` | `dest-${id}` / `url-${url}` |
+| **AG-UI RunFinishedEvent.sources** | `ag-ui.ts:RunFinishedEvent` | 前后端契约 |
+
+> **历史说明**:本节原为 §4.4 RAG 数据流(MySQL → Chroma → tool result → sources),2026-06-01 RAG 废弃后整节重写为 web_search 数据流。
 
 ---
 
@@ -626,23 +535,32 @@ OpenAI 兼容协议默认**流式响应不返回 usage**。不声明就拿不到
 
 **未来升级方向**:严重等级 = `high` 且来自非可信用户(阶段5 加身份层后)时硬拒绝,low/medium 仍走"包裹 + 让模型判"路径。
 
-### 5.7 为什么向量库选 Chroma(而不是 MySQL JSON 列 或 Milvus)★
+### 5.7 为什么 Run-as-Resource 完整版用"自研 RunManager + agent_run_events 表"而不是直接用 LangGraph Checkpointer(Task 整合-2)★
 
-阶段3 落地前 5 分钟的选型决策。三档对比:
+LangGraph 的 `MemorySaver` / `SqliteSaver` 是**框架自身的 thread 状态持久化**——给"interrupt + Command(resume)"用的,让 LangGraph 自己知道上次跑到哪。
 
-| 方案 | 评价 |
-|------|------|
-| **MySQL JSON 列存向量**(原计划 MVP) | ❌ 全表扫描算内积无索引,几千 chunk 就慢;不能讲行业标准接口;玩具感强 |
-| **Milvus / Pinecone**(生产级) | ❌ 运维成本与我们"几百个目的地"的数据规模不匹配,"为什么选 Milvus"难自圆其说 |
-| **Chroma**(实际选择) | ✅ docker 一键起;LangChain/LlamaIndex 生态;内置 HNSW 索引;能讲清楚选型理由 |
+我们的"前端切走再回来续订"需求是**另一回事**:
+- 前端要从某个事件 seq 开始重新拿到 AG-UI 事件流(渲染聊天 UI)
+- LangGraph thread state 跟 AG-UI 事件流是两套数据(前者是消息历史 + 工具调用记录,后者是 SSE 帧)
 
-**Chroma 的甜蜜点**:几千~几十万向量、单机或小集群。我们项目 18 chunk 性能上完全冗余——选它是为了学**行业标准接口**而非性能。
+所以做了职责分离:
+- **LangGraph Checkpointer**(进程内 `MemorySaver`)管 LangGraph 自己的 thread state
+- **`agent_run_events` 表**存我们项目业务的 AG-UI 事件流,seq 单调递增,**前端续订的 `?after_seq=N` 直接 SQL 查**
+- **`runManager` 在内存中持有 RunHandle**,绑定 LangGraph stream + 订阅者集合 + per-run AbortController;客户端断开仅 unsubscribe,Run 在 manager 内继续跑
 
-**接口仍然抽象成 `VectorStore`**(`src/rag/vectorStore.ts`),后续真有"亿级向量"需求,只换实现不动业务代码。
+**为什么 Checkpointer 不升级到 SqliteSaver**:进程重启后 LangGraph 自己能恢复 thread state 没问题,但"重新挂上 stream + 重建 subscriber + 重新 pump"这套需要重写大量代码,**收益不匹配学习项目复杂度**——所以选简单方案:重启时把 running 全标 failed,前端续订拿到 active=null 显示"已中断"。
 
-完整决策见 `docs/开发规划.md` 关键设计决策 #2、`docs/03-开发笔记/note-03 §3.1`。
+**三态 abort 模型**:
+- **Per-subscriber AbortController**:HTTP handler 持有,`req.raw 'close'` 触发 → 只调 `unsubscribe`,**不通知 RunManager**
+- **Per-run AbortController**:RunManager 持有,只在 ① `POST /runs/:runId/cancel`、② SIGTERM(目前没接,Task 5.4 接)、③ 5 分钟超时(目前没设,后续可加)三种情况触发 → 才真正 abort LangGraph stream
+- **两个 Controller 无级联** —— 这是跟 Chat App 阶段(整合-1 之前)最关键的差异
 
-### 5.9 为什么主 Agent 切到 LangGraph(Task 整合-1)★
+实测验证(e2e smoke):
+- 切走后查 /runs/active → status='running',lastEventSeq=283 持续涨 ✅
+- 主动 cancel → HTTP 202 + active=null + status='end' ✅
+- 续订 GET /runs/:runId/stream?after_seq=0 → 完整回放 RUN_STARTED + 后续事件 ✅
+
+### 5.8 为什么主 Agent 切到 LangGraph(Task 整合-1)★
 
 整合阶段做的决策:阶段3 完成后,真实使用反馈出"会话续流"需求(切走 Run 不停、回来续订),手写实现成本约 Task 4.5 完整复杂度;而 LangGraph 的 `thread_id` + `Checkpointer` 是现成的,**接框架的成本远低于手写**——所以决定整合-1 把主 Agent 切到 LangGraph,整合-2 借 Checkpointer 做轻量续流。
 
@@ -659,38 +577,17 @@ OpenAI 兼容协议默认**流式响应不返回 usage**。不声明就拿不到
 
 完整决策见 `docs/开发规划.md` 关键设计决策 #6、`docs/03-开发笔记/note-04`(待写)。
 
-### 5.8 为什么 Embedder 抽象成多 Provider(而不是直连 MiniMax)★
+### 5.9 为什么放弃静态 RAG → 改用动态 RAG via MCP(2026-06-01 决策)★
 
-阶段3 实施时碰到了一个非常真实的工程问题:**MiniMax 当前账号无 embedding 权限**(实测 `embo-01` 返回 `your current token plan not support model, embo-01`)。
+**完整实施过 → 实测后回滚**。阶段3 把 RAG 八股全套做过一遍(chunker / Embedder 抽象 4 实现 / Chroma 向量库 / RRF + lexical rerank / Xenova ONNX 本地 embedding,5 个 commit:`8502d52` ~ `ea485e8`)。
 
-如果硬编码到 MiniMax,RAG 全链路卡在第一步跑不通。所以做了抽象:
+**为什么实测后判定不适合**:旅游场景的核心数据(开园时间、票价、活动、天气)是**高频变动**的——静态 RAG 的"离线索引 + 召回"范式天生不适合,索引一旦灌完就开始过期。`docs/02-实验记录/exp-04`(已删)显示语义检索 Top-K 召回从 deterministic 4/6 → Xenova 6/6,但这只解决"查得准"不解决"内容新"。
 
-```ts
-// src/rag/embedder.ts
-export interface Embedder {
-  readonly name: string
-  readonly dim: number
-  generate(texts: string[]): Promise<number[][]>
-}
+**改用方案**:阶段4 通过 MCP/Skills 实时调用外部工具(Tavily web_search、高德地图、和风天气、携程等),本质上实现"动态 RAG"——查询时拉最新数据,不维护离线索引。Task 4.0(web_search,本次已完成)是第一步。
 
-// 3 个实现:
-// - MinimaxEmbedder(走 embo-01,需账号支持)
-// - OpenAIEmbedder(走 /embeddings 标准协议,需 OpenAI key)
-// - DeterministicEmbedder(字符 n-gram 哈希,完全离线,**默认**)
-```
+**学习材料保留**:`docs/01-面试八股文/03-RAG技术.md` 作为面试知识点保留,文件顶部加"本项目未采用"框注。面试讲法:**学了 → 实施了 → 实测后判定 → 回滚**——这是一个完整的工程判断 STAR 故事。
 
-**Deterministic 算法**:字符 2-gram + 3-gram → FNV-1a 哈希到 [0, 128) 维 → L2 归一化。
-- ✅ 相同/相似字面文本 cosine 较高,流程能跑
-- ❌ 不能捕捉真语义("辣"≠"火锅"——`exp-04` q2 实测暴露)
-
-**升级路径**:
-1. 改 `.env`:`EMBEDDING_PROVIDER=openai`(或 `minimax`/未来 `ollama`)
-2. 跑 `npm run index`(必须,维度变了)
-3. 业务代码 0 改动
-
-**这个决策的元价值**:所有外部依赖都该先做抽象层,你永远不知道哪个 provider 会卡你——这是阶段3 的工程教训,直接对应阶段5 Task 5.5 LLM 网关层的"多 provider 适配"思路。
-
-完整决策见 `docs/开发规划.md` 关键设计决策 #7、`docs/03-开发笔记/note-03 §2`。
+完整决策见 `docs/开发规划.md` 关键设计决策 #6。
 
 ---
 
@@ -698,19 +595,20 @@ export interface Embedder {
 
 | 局限 | 当前症状 | 修复 Task | 备注 |
 |------|---------|----------|------|
-| 切走会话 = 任务终止 | 切换会话或网络抖动,Run 被 abort,assistant 输出丢失 | **整合-2**(轻量版,即将做)+ **Task 4.5**(完整版) | 整合-1 已切 LangGraph 主线 → Checkpointer 现成,整合-2 借力做轻量续流 |
-| 无主动取消按钮 | 用户只能切走/关页面,不能"立刻停" | Task 4.5 | 需要新增 POST /sessions/:id/runs/:runId/cancel |
-| `[ASK_USER]` 是字符串协议 | 模型偶尔会忘记加前缀;且无法附带结构化 schema | Task 4.5 引入 LangGraph 风格 interrupt | 见 §5.4 |
+| ~~切走会话 = 任务终止~~ | ✅ **整合-2 已修复**:客户端断开 = unsubscribe(Run 继续写库) | — | e2e smoke 验证通过(lastEventSeq 持续涨) |
+| ~~无主动取消按钮~~ | ✅ **整合-2 已修复**:`POST /runs/:runId/cancel` + 前端「停止」按钮 | — | 三态 abort 模型(per-subscriber vs per-run 互不级联) |
+| `[ASK_USER]` 是字符串协议 | 模型偶尔会忘记加前缀;且无法附带结构化 schema | 后续可单独评估升级 LangGraph 原生 `interrupt()` | 当前协议工作正常,不阻塞 |
+| 进程重启后 Run 不自动续跑 | 启动时把 running 全标 failed;前端续订时拿到 `active=null` | Task 5.4 容器化时配 Redis Pub/Sub 跨进程方案 | 学习项目当前可接受 |
 | 评测无重试 | LLM 服务抖动时单次评测 fail,不可信 | Task 5.3 容错与重试 | 见 exp-02 第 2 轮事故 |
 | LLM 请求只盯总时长 | 服务长时间不下发数据但 keep-alive 时 timeout 不触发 | Task 5.3 stream-idle timeout | postChatStream 需要增加空闲监控 |
 | `estimateTokens` 精度差 | `length / 2` 在长 prompt 上误差 ±20% | Task 5.5 网关层接入 tiktoken | 不同 tokenizer 不通用是阻塞点 |
-| ~~`semantic_search_travel` 工具未实现~~ | ✅ **已完成**(Task 3.3) | — | testset.ts:sem-01 已转入硬性评估,实测通过 |
+| ~~静态 RAG 不适合实时数据场景~~ | ✅ **2026-06-01 决策回滚**:整套 RAG 链路删除,改用 Task 4.0 web_search + Task 4.4 MCP/Skills 实现动态 RAG | — | 详见 §5.9 决策 |
+| 数据库只覆盖 3 个目的地 | seed 硬编码成都/丽江/哈尔滨,其他城市靠 web_search | Task 4.4 MCP 接入高德/和风等 source 后,SQL 工具 + MySQL seed 可能整体退役 | 详见 `开发规划.md` Task 4.4 |
 | 多 Agent 协作 | 当前是单 Agent ReAct | Task 5.1 Supervisor 模式 | 阶段5 |
 | 注入检测纯靠正则规则 | 规则库有限,新型注入(语义级、多语种变体)可能漏检 | 阶段5 Task 5.3 引入 LLM-as-judge 二次校验 / 规则热更新 | 当前 11 条规则覆盖常见模式;实测 5/5 通过 |
 | 输出过滤只做"system prompt 泄露检测" | 没做 PII / 密钥 / 暴力内容过滤 | 阶段5 Task 5.5 网关层 + 项目无 PII 场景暂不紧迫 | 当前项目不涉及个人数据 |
-| Embedding 当前走 deterministic provider | 字符 n-gram 哈希,不反映真语义("辣"≠"火锅") | 切 `.env` 的 `EMBEDDING_PROVIDER=openai` 即可(需 OpenAI key) | 流程已通,生产前换 |
-| RAG 接 RAG 检索 chunk 已做 `detectInjection` | tools.ts:semantic_search_travel 中已实现 | — | 阶段3 顺手补完(原 note-02 §5.6 留的坑) |
-| RAG sources 字段前端未消费 | RUN_FINISHED.sources 已透出,但 web/src/App.tsx 尚未渲染"来源"标签 | 任意 web 迭代任务 | 后端契约已就位 |
+| sources 字段前端未消费 | RUN_FINISHED.sources 已透出(union 类型),但 web/src/App.tsx 尚未渲染"来源"标签 | 任意 web 迭代任务 | 后端契约已就位 |
+| web_search 无 key 时降级 | 未配 TAVILY_API_KEY 时模型走 SQL 兜底或如实告知用户 | 部署时配 key 即可 | 评测 `hardFailRate=0%` |
 
 ---
 
@@ -726,11 +624,15 @@ export interface Embedder {
 | 改 abort / 中断行为 | §3.3 中断处理 + §5.5 + §6 |
 | 改 chat_sessions / chat_messages schema | §3.4 / §3.5 + §1.2 + §6 局限对照 |
 | 落地某个规划 Task | §6 局限表标记移除 + 必要时新增决策小节到 §5 |
-| 引入新模块(eval/、rag/、agents/) | §1.1 分层图 + §1.2 职责表 |
+| 引入新模块(eval/、mcp/、skills/、agents/) | §1.1 分层图 + §1.2 职责表 |
 | 改 sanitize.ts 规则库 / 检测策略 | §1.2 模块职责 + §3.2 时序图入口节点 + §5.6 决策 + §6 局限表注入检测条目 |
-| 改 src/rag/(chunker / embedder / vectorStore / hybridSearch) | §1.2 模块职责 + §6 局限表 RAG 相关条目;若改了 AG-UI 事件结构(如 sources)同步 §4.2 |
-| 改 langgraph-agent.ts / langgraphToAgUi.ts(整合-1 后) | §1.2 模块表 Agent 主线 + §5.9 LangGraph 切换决策;若新事件类型同步 §4.2 |
-| 改 .env 的 EMBEDDING_PROVIDER / CHROMA_* | §6 局限表 embedding 行;不影响时序图 |
+| 改 tools.ts(增删工具 / 改 schema) | §1.2 模块职责 + §3.6 工具一览;若 web_search 流程变化同步 §4.4 |
+| 改 webSearchCache.ts(TTL、key 算法等) | §1.2 模块职责 + §4.4 缓存层路径 |
+| 改 langgraph-agent.ts / langgraphToAgUi.ts(整合-1 后) | §1.2 模块表 Agent 主线 + §5.8 LangGraph 切换决策;若新事件类型同步 §4.2 |
+| 改 runManager.ts / runRepo.ts(整合-2 核心) | §1.2 模块表 Run 管理器 / Run 仓库 + §5.7 Run-as-Resource 决策 + §6 局限表续订 / cancel 条目 |
+| 改 agent_runs / agent_run_events schema | DB migration 003 + §1.2 + §6 |
+| 加 / 改 /runs/* HTTP 路由 | §2 API 一览 |
+| 改 ag-ui.ts 的 Source 类型(union 分支) | §1.2 AG-UI 协议行 + §4.4 sources 路径 |
 
 **维护铁律**:任何 PR 涉及上述变更,**必须在 PR 描述里勾选已更新本文档的章节**。Claude Code 接手开发时,提交前应回到本文档自检。
 

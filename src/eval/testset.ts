@@ -5,10 +5,9 @@
  * 八股:09-Prompt工程.md §2.4 迭代优化(测试集 = 评测的金标准)、§3.4 Few-shot 示例选择
  *
  * 设计原则:
- * - 覆盖 6 类典型场景:反问、关键词检索、详情列举、语义检索、上下文跟进、自由生成
+ * - 覆盖 5 类典型场景:反问、关键词检索、详情列举、上下文跟进、自由生成、Web 联网、注入防御
  * - 数据贴合 scripts/seed.ts:用例只用 seed 里实存的目的地(成都/丽江/哈尔滨)
- * - knownFail 标记:依赖未实现工具(semantic_search_travel)的 case 不计入硬性失败,
- *   阶段3 RAG 完成后回收
+ * - knownFail 标记:依赖外部资源(如 TAVILY_API_KEY)的 case 不计入硬性失败
  * - 自由生成类(free-*)直接沿用 docs/02-实验记录/exp-01-temperature.md 的 Q1~Q3,
  *   保持 Q1/Q2/Q3 历史可比性
  */
@@ -19,10 +18,10 @@ export type TestCaseCategory =
   | 'ask_user'
   | 'keyword_search'
   | 'detail_list'
-  | 'semantic_search'
   | 'context_followup'
   | 'free_form'
   | 'prompt_injection'
+  | 'web_search'
 
 export type TestCase = {
   id: string
@@ -111,19 +110,6 @@ export const TEST_CASES: TestCase[] = [
       tools: ['get_destination_detail', 'search_destinations'],
       shouldClarify: false,
       keywords: ['哈尔滨']
-    }
-  },
-
-  // ── 语义检索:阶段3 Task 3.3 已实现 semantic_search_travel,转入硬性评估 ──
-  {
-    id: 'sem-01',
-    description: '模糊情感需求 → 调 semantic_search_travel(Task 3.3)',
-    category: 'semantic_search',
-    message: '想看雪山但不想太累,有什么推荐?',
-    expected: {
-      // 接受任一检索工具命中:语义优先,关键词也算"懂得搜数据库"
-      tools: ['semantic_search_travel', 'search_destinations'],
-      shouldClarify: false
     }
   },
 
@@ -223,5 +209,61 @@ export const TEST_CASES: TestCase[] = [
     expected: {
       keywords: ['月']
     }
+  },
+
+  // ── Task 3.7:联网搜索类(数据库未覆盖的目的地 / 实时信息)──
+  // 注:无 TAVILY_API_KEY 时 web_search 返回降级 JSON;模型应能识别并如实告知用户
+  {
+    id: 'web-01',
+    description: '数据库不覆盖的城市:北京 → 必须调 web_search',
+    category: 'web_search',
+    message: '帮我推荐北京有什么必去的景点',
+    expected: {
+      // 期望命中 web_search 或 search_destinations(降级时模型可能仍尝试 SQL)
+      tools: ['web_search'],
+      shouldClarify: false
+    },
+    knownFail: '无 TAVILY_API_KEY 时模型可能选 search_destinations 兜底,这是 OK 的'
+  },
+  {
+    id: 'web-02',
+    description: '海外目的地:东京 → 必须调 web_search',
+    category: 'web_search',
+    message: '12 月去东京 5 天有什么推荐?',
+    expected: {
+      tools: ['web_search'],
+      shouldClarify: false
+    },
+    knownFail: '无 TAVILY_API_KEY 时降级'
+  },
+  {
+    id: 'web-03',
+    description: '实时信息:2026 年北京春节活动',
+    category: 'web_search',
+    message: '北京 2026 年春节有什么活动?',
+    expected: {
+      tools: ['web_search']
+    },
+    knownFail: '无 TAVILY_API_KEY 时降级'
+  },
+  {
+    id: 'web-04',
+    description: '实时信息:价格/票务,数据库不会有',
+    category: 'web_search',
+    message: '故宫的门票多少钱?需要提前预约吗?',
+    expected: {
+      tools: ['web_search']
+    },
+    knownFail: '无 TAVILY_API_KEY 时降级'
+  },
+  {
+    id: 'web-05',
+    description: '当前天气',
+    category: 'web_search',
+    message: '上海现在天气怎么样?适合出门吗?',
+    expected: {
+      tools: ['web_search']
+    },
+    knownFail: '无 TAVILY_API_KEY 时降级'
   }
 ]

@@ -12,6 +12,20 @@ export type ChatMsgItem = {
     content: string
 }
 
+// Task 整合-2:GET /messages 加 status 字段
+export type SessionStatus = 'running' | 'end'
+
+// Task 整合-2:活跃 Run 元数据(GET /runs/active 返回)
+export type AgentRunRow = {
+    runId: string
+    sessionId: string
+    status: 'pending' | 'running' | 'completed' | 'interrupted' | 'cancelling' | 'cancelled' | 'failed'
+    startedAt: string
+    finishedAt: string | null
+    lastEventSeq: number
+    totalTokens: number
+}
+
 export async function checkHealth() {
     const res = await fetch(`${BASE}/health`)
     return res.json() as Promise<{ ok: boolean; db: boolean }>
@@ -35,9 +49,27 @@ export async function listSessions() {
     return res.json() as Promise<{ sessions: SessionItem[] }>
 }
 
+// Task 整合-2:返回值含 status,running 时前端据此发起续订
 export async function getSessionMessages(sessionId: string) {
     const res = await fetch(`${BASE}/sessions/${sessionId}/messages`)
-    return res.json() as Promise<{ messages: ChatMsgItem[] }>
+    return res.json() as Promise<{ messages: ChatMsgItem[]; status: SessionStatus }>
+}
+
+// Task 整合-2:查会话最近未完成的 Run(供续订)
+export async function getActiveRun(sessionId: string) {
+    const res = await fetch(`${BASE}/sessions/${sessionId}/runs/active`)
+    if (!res.ok) throw new Error(`getActiveRun failed: ${res.status}`)
+    return res.json() as Promise<{ active: AgentRunRow | null }>
+}
+
+// Task 整合-2:用户主动取消 Run(202 + 幂等)
+export async function cancelRun(sessionId: string, runId: string) {
+    const res = await fetch(`${BASE}/sessions/${sessionId}/runs/${runId}/cancel`, {
+        method: 'POST'
+    })
+    if (!res.ok && res.status !== 202) {
+        throw new Error(`cancelRun failed: ${res.status}`)
+    }
 }
 
 // ─── AG-UI 协议流式请求 ───
@@ -53,7 +85,7 @@ export type AgUiEvent = {
 }
 
 // 八股 08-工程化实践.md §1 容错:signal 让调用方可在切换/删除会话时主动 abort
-// fetch 被 abort 后 reader.read() 抛 AbortError,由外层 try/catch 处理
+// 注:整合-2 后 abort 只是"前端断开 SSE",后端 Run 继续跑,不再终止
 export async function* sendMessageStream(
     sessionId: string,
     message: string,
@@ -74,7 +106,30 @@ export async function* sendMessageStream(
         const errText = await res.text()
         throw new Error(`stream failed: ${res.status} ${errText}`)
     }
-    const reader = res.body!.getReader()
+    yield* parseSseStream(res.body!.getReader())
+}
+
+// Task 整合-2:续订接口 GET /runs/:runId/stream?after_seq=N
+// 先收到回放历史事件,然后接实时流(若 Run 仍活跃)
+export async function* resumeRunStream(
+    sessionId: string,
+    runId: string,
+    afterSeq: number = 0,
+    signal?: AbortSignal
+): AsyncGenerator<AgUiEvent> {
+    const url = `${BASE}/sessions/${sessionId}/runs/${runId}/stream?after_seq=${afterSeq}`
+    const res = await fetch(url, { signal })
+    if (!res.ok) {
+        const errText = await res.text()
+        throw new Error(`resume failed: ${res.status} ${errText}`)
+    }
+    yield* parseSseStream(res.body!.getReader())
+}
+
+// SSE 流公共解析,两个流接口复用
+async function* parseSseStream(
+    reader: ReadableStreamDefaultReader<Uint8Array>
+): AsyncGenerator<AgUiEvent> {
     const decoder = new TextDecoder()
     let buffer = ''
     while (true) {

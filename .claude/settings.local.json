@@ -12,7 +12,16 @@
       "Bash(python3 -c \"import json,sys;d=json.load\\(sys.stdin\\);r=d['details'][0];print\\('tools  :',r['actual']['tools']\\);print\\('text   :',r['actual']['text'][:200]\\)\")",
       "Bash(python3 -c ' *)",
       "Bash(npm i *)",
-      "Bash(grep -nA1 \"runAgentStream\\(\" /Users/ja/Desktop/guide-plan-agent/src/eval/runner.ts)"
+      "Bash(grep -nA1 \"runAgentStream\\(\" /Users/ja/Desktop/guide-plan-agent/src/eval/runner.ts)",
+      "Bash(curl *)",
+      "Bash(grep -n \"definitions = \\\\[\\\\|^const definitions\\\\|semantic_search_travel.*function\\\\|^]$\\\\|^]\" /Users/ja/Desktop/guide-plan-agent/src/agent/tools.ts)",
+      "Bash(awk -F: '{print $1}')",
+      "Bash(npm install *)",
+      "Bash(docker compose *)",
+      "Bash(node -e ' *)",
+      "Read(//Users/ja/.nvm/versions/node/**)",
+      "Read(//opt/homebrew/Cellar/**)",
+      "Bash(export PATH=\"/Users/ja/.nvm/versions/node/v22.22.2/bin:$PATH\")"
     ]
   }
 }

@@ -60,7 +60,7 @@ const RULES: Rule[] = [
  *
  * 八股:09 §8.3 防御策略 #1 输入清洗
  *
- * @param text 待检测的用户输入(或 RAG 检索片段)
+ * @param text 待检测的用户输入(或 web_search 等外部检索片段)
  * @returns matched/patterns/severity;severity 取所有命中规则中的最高级
  */
 export function detectInjection(text: string): InjectionDetection {

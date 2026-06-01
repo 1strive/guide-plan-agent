@@ -96,9 +96,8 @@ export const v1Base: PromptTemplate = {
   taskScope: '...',            // Task 2.3 第 2 轮加(见下文)
   toolUsageRules: [
     '当用户要求「列举」...必须调用 get_destination_detail',
-    '当用户描述模糊...优先 semantic_search_travel',
     '当用户给出明确关键词时...search_destinations',
-    '若结构化事实与语义片段冲突...以结构化为准'
+    // 注:本笔记编写时还有 semantic_search_travel(RAG 入口),2026-06-01 RAG 链路废弃后已删除
   ],
   outputFormat: [...],
   contextRules: [...],
@@ -199,7 +198,7 @@ export const v2Cot: PromptTemplate = {
 1. 用户的核心偏好是什么(目的地特征、预算、节奏、主题)?
 2. 已有的会话历史里有没有可以复用的上下文?
 3. 当前信息是否足够给出有效建议——若不足,先按反问规则发起 [ASK_USER]。
-4. 信息充分时,选择最匹配的工具(列举条目→get_destination_detail;模糊匹配→semantic_search_travel;明确关键词→search_destinations)。
+4. 信息充分时,选择最匹配的工具(列举条目→get_destination_detail;明确关键词或地区→search_destinations;数据库不覆盖的城市/实时信息→web_search)。  // 注:本笔记编写时这里是 semantic_search_travel,2026-06-01 RAG 废弃后改为 web_search
 5. 整合工具结果,用简洁、可执行的语言回答。`
 }
 ```
@@ -252,10 +251,12 @@ export type TestCase = {
 | `ask_user` | 2 | 信息严重不足必须触发 `[ASK_USER]` |
 | `keyword_search` | 2 | 明确地区/主题 → 期望 `search_destinations` |
 | `detail_list` | 2 | 列举条目 → 期望 `get_destination_detail` |
-| `semantic_search` | 1 | 模糊需求 → 期望 `semantic_search_travel`(Task 3.3 后转硬性评估) |
 | `context_followup` | 1 | "按刚才说的" → 期望理解指代 |
 | `free_form` | 3 | 沿用 exp-01 的 Q1/Q2/Q3 保持温度实验可比 |
 | `prompt_injection` | 5 | 直接/中文/伪 system 块/DAN/伪 `<system>` 标签 |
+| `web_search` | 5 | 数据库外目的地 / 实时信息 → 期望 `web_search`(Task 4.0) |
+
+> **注**:笔记编写时还有 `semantic_search` 1 个 case(sem-01,期望 `semantic_search_travel`),2026-06-01 RAG 链路废弃后已删除,该 category 也一起去掉。
 
 **数据贴合 seed**:case 里只用 `成都/丽江/哈尔滨`(`scripts/seed.ts` 实存目的地),否则工具返回空 = 假性失败。
 

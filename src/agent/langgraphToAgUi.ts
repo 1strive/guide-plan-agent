@@ -64,7 +64,8 @@ function parseAskUser(text: string): { isAskUser: boolean; question: string; opt
 type Ctx = {
   threadId: string
   runId: string
-  sourceMap: Map<number, Source>
+  // Task 3.7:key 改 string 以兼容 destination(dest-id)与 url(url-地址)两类 source
+  sourceMap: Map<string, Source>
   onUsage?: (usage: TokenUsage, round: number) => void
 }
 

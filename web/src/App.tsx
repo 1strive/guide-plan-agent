@@ -26,16 +26,19 @@ export default function App() {
     options?: string[];
   } | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
-  // 八股 08-工程化实践.md §1 容错:Chat App 阶段的"客户端断开 = 整链终止"。
-  // 切换 / 新建 / 删除当前会话时 abort 正在跑的 fetch,后端 req.raw 'close' 钩子接着 abort agent run。
-  // Task 4.5 重构为 Run-as-Resource 后,这个 ref 会被「显式停止按钮 + 切走仅 unsubscribe」取代。
+
+  // Task 整合-2:streamCtrlRef abort 后**仅前端断开 SSE**,后端 Run 继续跑 + 持续写库;
+  // 主动停止需调 cancelRun(走「停止」按钮)
   const streamCtrlRef = useRef<AbortController | null>(null);
+  // Task 整合-2:当前 Run 的 runId,从 RUN_STARTED 事件拿;给「停止」按钮 / 续订用
+  const currentRunIdRef = useRef<string | null>(null);
 
   function abortInFlight() {
     if (streamCtrlRef.current) {
       streamCtrlRef.current.abort();
       streamCtrlRef.current = null;
     }
+    currentRunIdRef.current = null;
   }
 
   const refreshSessions = useCallback(async () => {
@@ -60,28 +63,78 @@ export default function App() {
     await switchSession(newId);
   }
 
+  /**
+   * Task 整合-2 切换会话流程:
+   * 1. abort 旧 SSE(后端 Run 继续在跑)
+   * 2. 加载历史 messages + status
+   * 3. status='running' → getActiveRun 拿 runId → 启动续订(从 seq=0 完整回放)
+   *    续订时把"已加载历史里的最后一条 assistant"剔除(因为续订会重建它)
+   * 4. 续订完成 = Run 结束 → sending 自动转 false
+   */
   async function switchSession(id: string) {
     abortInFlight();
     setSending(false);
     setActiveId(id);
     setMessages([]);
     setPendingInterrupt(null);
+
+    let initialMessages: ChatMsg[] = [];
+    let status: api.SessionStatus = "end";
     try {
       const data = await api.getSessionMessages(id);
-      const loaded: ChatMsg[] = data.messages
+      status = data.status;
+      initialMessages = data.messages
         .filter((m) => m.role === "user" || m.role === "assistant")
         .map((m) => ({
           role: m.role as "user" | "assistant",
           content: m.content,
         }));
-      setMessages(loaded);
     } catch {
-      setMessages([]);
+      initialMessages = [];
+    }
+
+    // 整合-2:running 会话需要续订;此时剔除最后一条 assistant(回放会重建它)
+    if (status === "running") {
+      try {
+        const { active } = await api.getActiveRun(id);
+        if (active && active.status !== "completed" && active.status !== "cancelled" && active.status !== "failed") {
+          // 剔除最后一条 assistant,等续订事件回放重建
+          const lastMsg = initialMessages[initialMessages.length - 1];
+          if (lastMsg && lastMsg.role === "assistant") {
+            initialMessages = initialMessages.slice(0, -1);
+          }
+          setMessages(initialMessages);
+          // 启动续订,从 0 开始完整回放
+          void startResume(id, active.runId);
+          return;
+        }
+      } catch {
+        // active 接口失败不阻断,继续走静态加载
+      }
+    }
+
+    setMessages(initialMessages);
+  }
+
+  /** 启动续订(GET /runs/:runId/stream?after_seq=0)→ 走跟 handleSend 一样的事件循环 */
+  async function startResume(sessionId: string, runId: string) {
+    const ctl = new AbortController();
+    streamCtrlRef.current = ctl;
+    currentRunIdRef.current = runId;
+    setSending(true);
+    // 续订时不预先加 placeholder assistant — 事件回放里有 RUN_STARTED 等,
+    // 第一个 TEXT_MESSAGE_CONTENT 来时我们在 consumeStream 里 lazy 加
+    try {
+      const stream = api.resumeRunStream(sessionId, runId, 0, ctl.signal);
+      await consumeStream(stream, ctl, /* hasPreAssistantStub */ false);
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") {
+        console.error("resume failed:", e);
+      }
     }
   }
 
   async function handleDeleteSession(id: string, e: React.MouseEvent) {
-    // 关键:阻止冒泡到 li 的 onClick(否则会先触发 switchSession)
     e.stopPropagation();
     const session = sessions.find((s) => s.id === id);
     const title = session?.title || id.slice(0, 8) + "…";
@@ -98,89 +151,154 @@ export default function App() {
     await refreshSessions();
   }
 
+  /**
+   * Task 整合-2:主动停止当前 Run
+   * 调 cancelRun(后端推进 cancelling → cancelled),前端 abort SSE
+   */
+  async function handleStop() {
+    const runId = currentRunIdRef.current;
+    if (!runId || !activeId) return;
+    try {
+      await api.cancelRun(activeId, runId);
+    } catch (e) {
+      console.error("cancelRun failed:", e);
+    }
+    abortInFlight();
+    setSending(false);
+  }
+
   async function handleSend(resumeInterrupt?: { id: string; reason: string }) {
     const text = input.trim();
     if (!text || !activeId || sending) return;
 
     setInput("");
     setPendingInterrupt(null);
-    setMessages((prev) => [...prev, { role: "user", content: text }]);
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", content: text },
+      { role: "assistant", content: "", toolCalls: [] },
+    ]);
     setSending(true);
 
-    // 八股 08 §1:为本次请求建独立 AbortController,登记到 ref 供切换/删除时停掉
     const ctl = new AbortController();
     streamCtrlRef.current = ctl;
+    currentRunIdRef.current = null;
 
+    const resume = resumeInterrupt
+      ? [
+          {
+            interruptId: resumeInterrupt.id,
+            status: "resolved" as const,
+            payload: { answer: text },
+          },
+        ]
+      : undefined;
+
+    const stream = api.sendMessageStream(activeId!, text, resume, ctl.signal);
+    await consumeStream(stream, ctl, /* hasPreAssistantStub */ true);
+  }
+
+  function handleOptionClick(option: string) {
+    if (!pendingInterrupt || sending) return;
+    setInput("");
+    const resumeInterrupt = {
+      id: pendingInterrupt.id,
+      reason: pendingInterrupt.reason,
+    };
+    setPendingInterrupt(null);
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", content: option },
+      { role: "assistant", content: "", toolCalls: [] },
+    ]);
+    setSending(true);
+
+    const ctl = new AbortController();
+    streamCtrlRef.current = ctl;
+    currentRunIdRef.current = null;
+
+    const stream = api.sendMessageStream(
+      activeId!,
+      option,
+      [
+        {
+          interruptId: resumeInterrupt.id,
+          status: "resolved" as const,
+          payload: { answer: option },
+        },
+      ],
+      ctl.signal,
+    );
+    void consumeStream(stream, ctl, /* hasPreAssistantStub */ true);
+  }
+
+  /**
+   * 公共事件循环:被 handleSend / handleOptionClick / startResume(续订)复用
+   * hasPreAssistantStub:调用方是否已经 push 了 placeholder assistant 占位
+   *   - true:handleSend/Option 走的就绪路径(下一个 TEXT_MESSAGE_CONTENT 直接 append 到末尾)
+   *   - false:续订路径(messages 里没占位,第一个 TEXT 来时 lazy 加)
+   */
+  async function consumeStream(
+    stream: AsyncGenerator<api.AgUiEvent>,
+    ctl: AbortController,
+    hasPreAssistantStub: boolean,
+  ) {
     let assistantContent = "";
     const toolCalls: Array<{ name: string; status: "running" | "done" }> = [];
     let currentInterrupt:
       | { id: string; message: string; reason: string; options?: string[] }
       | undefined;
+    let assistantStubAdded = hasPreAssistantStub;
 
-    setMessages((prev) => [
-      ...prev,
-      { role: "assistant", content: "", toolCalls: [] },
-    ]);
+    const ensureAssistantStub = () => {
+      if (!assistantStubAdded) {
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: "", toolCalls: [] },
+        ]);
+        assistantStubAdded = true;
+      }
+    };
+
+    const updateLastAssistant = () => {
+      setMessages((prev) => {
+        const next = [...prev];
+        next[next.length - 1] = {
+          role: "assistant",
+          content: assistantContent,
+          toolCalls: [...toolCalls],
+        };
+        return next;
+      });
+    };
 
     try {
-      const resume = resumeInterrupt
-        ? [
-            {
-              interruptId: resumeInterrupt.id,
-              status: "resolved" as const,
-              payload: { answer: text },
-            },
-          ]
-        : undefined;
-
-      for await (const event of api.sendMessageStream(
-        activeId!,
-        text,
-        resume,
-        ctl.signal,
-      )) {
+      for await (const event of stream) {
         switch (event.type) {
+          case "RUN_STARTED": {
+            // 整合-2:拿到 runId 存 ref(给「停止」按钮用)
+            currentRunIdRef.current = event.runId as string;
+            break;
+          }
           case "TEXT_MESSAGE_CONTENT": {
+            ensureAssistantStub();
             assistantContent += event.delta as string;
-            setMessages((prev) => {
-              const next = [...prev];
-              next[next.length - 1] = {
-                role: "assistant",
-                content: assistantContent,
-                toolCalls: [...toolCalls],
-              };
-              return next;
-            });
+            updateLastAssistant();
             break;
           }
           case "TOOL_CALL_START": {
+            ensureAssistantStub();
             toolCalls.push({
               name: event.toolCallName as string,
               status: "running",
             });
-            setMessages((prev) => {
-              const next = [...prev];
-              next[next.length - 1] = {
-                role: "assistant",
-                content: assistantContent,
-                toolCalls: [...toolCalls],
-              };
-              return next;
-            });
+            updateLastAssistant();
             break;
           }
           case "TOOL_CALL_END": {
             const runningCall = toolCalls.find((t) => t.status === "running");
             if (runningCall) runningCall.status = "done";
-            setMessages((prev) => {
-              const next = [...prev];
-              next[next.length - 1] = {
-                role: "assistant",
-                content: assistantContent,
-                toolCalls: [...toolCalls],
-              };
-              return next;
-            });
+            updateLastAssistant();
             break;
           }
           case "RUN_FINISHED": {
@@ -191,6 +309,7 @@ export default function App() {
                     id: string;
                     message?: string;
                     reason: string;
+                    metadata?: { options?: string[] };
                   }>;
                 }
               | undefined;
@@ -200,16 +319,14 @@ export default function App() {
               outcome.interrupts.length > 0
             ) {
               const intItem = outcome.interrupts[0]!;
-              const interruptOptions = (
-                intItem as { metadata?: { options?: string[] } }
-              ).metadata?.options;
               currentInterrupt = {
                 id: intItem.id,
                 message: intItem.message ?? "",
                 reason: intItem.reason,
-                options: interruptOptions,
+                options: intItem.metadata?.options,
               };
               setPendingInterrupt(currentInterrupt);
+              ensureAssistantStub();
               setMessages((prev) => {
                 const next = [...prev];
                 const last = next[next.length - 1]!;
@@ -225,24 +342,18 @@ export default function App() {
             break;
           }
           case "RUN_ERROR": {
+            ensureAssistantStub();
             assistantContent += `\n[错误] ${event.message}`;
-            setMessages((prev) => {
-              const next = [...prev];
-              next[next.length - 1] = {
-                role: "assistant",
-                content: assistantContent,
-                toolCalls: [...toolCalls],
-              };
-              return next;
-            });
+            updateLastAssistant();
             break;
           }
         }
       }
       await refreshSessions();
     } catch (e) {
-      // 用户切换/删除会话主动 abort 走这里,不算错误,直接吞掉
+      // AbortError 走切换 / 删除 / 主动停止路径,不算异常
       if ((e as Error).name !== "AbortError") {
+        ensureAssistantStub();
         setMessages((prev) => {
           const next = [...prev];
           next[next.length - 1] = {
@@ -254,6 +365,7 @@ export default function App() {
       }
     } finally {
       if (streamCtrlRef.current === ctl) streamCtrlRef.current = null;
+      currentRunIdRef.current = null;
       setSending(false);
     }
   }
@@ -270,161 +382,6 @@ export default function App() {
         handleSend();
       }
     }
-  }
-
-  function handleOptionClick(option: string) {
-    if (!pendingInterrupt || sending) return;
-    setInput("");
-    setPendingInterrupt(null);
-    setMessages((prev) => [...prev, { role: "user", content: option }]);
-    setSending(true);
-
-    // 同 handleSend:独立 AbortController 注册到 ref,切走时可断流
-    const ctl = new AbortController();
-    streamCtrlRef.current = ctl;
-
-    let assistantContent = "";
-    const toolCalls: Array<{ name: string; status: "running" | "done" }> = [];
-    let currentInterrupt:
-      | { id: string; message: string; reason: string; options?: string[] }
-      | undefined;
-
-    setMessages((prev) => [
-      ...prev,
-      { role: "assistant", content: "", toolCalls: [] },
-    ]);
-
-    const resume = [
-      {
-        interruptId: pendingInterrupt.id,
-        status: "resolved" as const,
-        payload: { answer: option },
-      },
-    ];
-
-    (async () => {
-      try {
-        for await (const event of api.sendMessageStream(
-          activeId!,
-          option,
-          resume,
-          ctl.signal,
-        )) {
-          switch (event.type) {
-            case "TEXT_MESSAGE_CONTENT": {
-              assistantContent += event.delta as string;
-              setMessages((prev) => {
-                const next = [...prev];
-                next[next.length - 1] = {
-                  role: "assistant",
-                  content: assistantContent,
-                  toolCalls: [...toolCalls],
-                };
-                return next;
-              });
-              break;
-            }
-            case "TOOL_CALL_START": {
-              toolCalls.push({
-                name: event.toolCallName as string,
-                status: "running",
-              });
-              setMessages((prev) => {
-                const next = [...prev];
-                next[next.length - 1] = {
-                  role: "assistant",
-                  content: assistantContent,
-                  toolCalls: [...toolCalls],
-                };
-                return next;
-              });
-              break;
-            }
-            case "TOOL_CALL_END": {
-              const runningCall = toolCalls.find((t) => t.status === "running");
-              if (runningCall) runningCall.status = "done";
-              setMessages((prev) => {
-                const next = [...prev];
-                next[next.length - 1] = {
-                  role: "assistant",
-                  content: assistantContent,
-                  toolCalls: [...toolCalls],
-                };
-                return next;
-              });
-              break;
-            }
-            case "RUN_FINISHED": {
-              const outcome = event.outcome as
-                | {
-                    type: string;
-                    interrupts?: Array<{
-                      id: string;
-                      message?: string;
-                      reason: string;
-                      metadata?: { options?: string[] };
-                    }>;
-                  }
-                | undefined;
-              if (
-                outcome?.type === "interrupt" &&
-                outcome.interrupts &&
-                outcome.interrupts.length > 0
-              ) {
-                const intItem = outcome.interrupts[0]!;
-                currentInterrupt = {
-                  id: intItem.id,
-                  message: intItem.message ?? "",
-                  reason: intItem.reason,
-                  options: intItem.metadata?.options,
-                };
-                setPendingInterrupt(currentInterrupt);
-                setMessages((prev) => {
-                  const next = [...prev];
-                  const last = next[next.length - 1]!;
-                  next[next.length - 1] = {
-                    role: last.role,
-                    content: currentInterrupt!.message,
-                    toolCalls: last.toolCalls,
-                    interrupt: currentInterrupt,
-                  };
-                  return next;
-                });
-              }
-              break;
-            }
-            case "RUN_ERROR": {
-              assistantContent += `\n[错误] ${event.message}`;
-              setMessages((prev) => {
-                const next = [...prev];
-                next[next.length - 1] = {
-                  role: "assistant",
-                  content: assistantContent,
-                  toolCalls: [...toolCalls],
-                };
-                return next;
-              });
-              break;
-            }
-          }
-        }
-        await refreshSessions();
-      } catch (e) {
-        if ((e as Error).name !== "AbortError") {
-          setMessages((prev) => {
-            const next = [...prev];
-            next[next.length - 1] = {
-              role: "assistant",
-              content: `[请求失败] ${(e as Error).message}`,
-            };
-            return next;
-          });
-        }
-      } finally {
-        if (streamCtrlRef.current === ctl) streamCtrlRef.current = null;
-        setSending(false);
-      }
-    })();
   }
 
   const activeSession = sessions.find((s) => s.id === activeId);
@@ -551,6 +508,12 @@ export default function App() {
             }
             disabled={!activeId || sending}
           />
+          {/* Task 整合-2:主动停止按钮(只在 sending + 有 runId 时显示) */}
+          {sending && currentRunIdRef.current && (
+            <button onClick={handleStop} className="btn-stop" title="主动停止当前 Run">
+              停止
+            </button>
+          )}
           <button
             onClick={() => {
               if (pendingInterrupt) {

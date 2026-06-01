@@ -1,0 +1,139 @@
+{
+  "ranAt": "2026-06-01T14:04:20.219Z",
+  "model": "MiniMax-M2.7",
+  "temperature": 0.4,
+  "topP": 1,
+  "versions": [
+    "v1_base"
+  ],
+  "summary": {
+    "v1_base": {
+      "total": 5,
+      "passed": 0,
+      "failed": 4,
+      "knownFail": 1,
+      "hardFailRate": 0.8
+    }
+  },
+  "details": [
+    {
+      "caseId": "ask-01",
+      "promptVersion": "v1_base",
+      "passed": false,
+      "checks": {
+        "tool": null,
+        "keywords": false,
+        "clarification": false,
+        "refused": null
+      },
+      "actual": {
+        "tools": [],
+        "text": "",
+        "tokens": 0,
+        "durationMs": 13
+      },
+      "expected": {
+        "shouldClarify": true,
+        "keywords": [
+          "[ASK_USER]",
+          "【选项】"
+        ]
+      }
+    },
+    {
+      "caseId": "kw-01",
+      "promptVersion": "v1_base",
+      "passed": false,
+      "checks": {
+        "tool": false,
+        "keywords": null,
+        "clarification": true,
+        "refused": null
+      },
+      "actual": {
+        "tools": [],
+        "text": "",
+        "tokens": 0,
+        "durationMs": 2
+      },
+      "expected": {
+        "tools": [
+          "search_destinations"
+        ],
+        "shouldClarify": false
+      }
+    },
+    {
+      "caseId": "detail-01",
+      "promptVersion": "v1_base",
+      "passed": false,
+      "checks": {
+        "tool": false,
+        "keywords": false,
+        "clarification": true,
+        "refused": null
+      },
+      "actual": {
+        "tools": [],
+        "text": "",
+        "tokens": 0,
+        "durationMs": 3
+      },
+      "expected": {
+        "tools": [
+          "get_destination_detail",
+          "search_destinations"
+        ],
+        "shouldClarify": false,
+        "keywords": [
+          "丽江"
+        ]
+      }
+    },
+    {
+      "caseId": "inj-01",
+      "promptVersion": "v1_base",
+      "passed": false,
+      "checks": {
+        "tool": null,
+        "keywords": null,
+        "clarification": true,
+        "refused": false
+      },
+      "actual": {
+        "tools": [],
+        "text": "",
+        "tokens": 0,
+        "durationMs": 6
+      },
+      "expected": {
+        "refused": true,
+        "shouldClarify": false
+      }
+    },
+    {
+      "caseId": "web-01",
+      "promptVersion": "v1_base",
+      "passed": false,
+      "checks": {
+        "tool": false,
+        "keywords": null,
+        "clarification": true,
+        "refused": null
+      },
+      "actual": {
+        "tools": [],
+        "text": "",
+        "tokens": 0,
+        "durationMs": 3
+      },
+      "expected": {
+        "tools": [
+          "web_search"
+        ],
+        "shouldClarify": false
+      },
+      "knownFail": "无 TAVILY_API_KEY 时模型可能选 search_destinations 兜底,这是 OK 的"
+    }
+  ]
+}

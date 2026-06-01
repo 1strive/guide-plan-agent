@@ -38,18 +38,10 @@ const envSchema = dbEnvSchema.extend({
   // Task 2.1:Prompt 版本切换;具体值由 src/agent/prompts/index.ts 的 registry 决定,
   // 未知版本运行期会 throw(避免 enum 限定导致每加版本都要改 schema)
   PROMPT_VERSION: z.string().default('v1_base'),
-  // 阶段3 RAG:Chroma 向量库地址 + collection 名(灌数据/查询都用这个)
-  CHROMA_URL: z.string().default('http://127.0.0.1:8000'),
-  CHROMA_COLLECTION: z.string().default('destinations_v1'),
-  // RAG 召回参数(.env 已有,这里 zod 化方便 IDE 跳转)
-  RAG_TOP_K_DEFAULT: z.coerce.number().default(8),
-  // Embedding provider 切换:
-  // - minimax: 走 embo-01,需 token plan 支持(当前账号不支持)
-  // - openai : 走 text-embedding-3-small,需真 OpenAI key
-  // - deterministic: 字符 n-gram 哈希向量,完全离线;**仅用于 dev/演示**
-  //   语义相似度有限,但足以验证 RAG 全链路 + Chroma 索引行为
-  EMBEDDING_PROVIDER: z.enum(['minimax', 'openai', 'deterministic']).default('deterministic'),
-  EMBEDDING_DIM: z.coerce.number().default(128)
+  // Task 3.7:Tavily 联网搜索;无 key 时 web_search 工具返回降级消息(不崩)
+  TAVILY_API_KEY: z.string().optional(),
+  // 缓存 TTL 默认 24h(同 query hash 命中直接复用,避免烧免费额度)
+  WEB_SEARCH_CACHE_TTL_SECONDS: z.coerce.number().default(86400)
 })
 
 export type AppConfig = z.infer<typeof envSchema>

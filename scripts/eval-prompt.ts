@@ -12,7 +12,7 @@
  *
  * 实现要点:
  * - 串行执行:避免并发打爆 LLM rate limit,每 case 间 sleep 默认 1s
- * - knownFail 单独计数:依赖未实现工具(如 semantic_search_travel)的 case 不计入硬失败
+ * - knownFail 单独计数:依赖外部资源(如未配置 TAVILY_API_KEY 的 web-* case)不计入硬失败
  * - 输出双份:控制台摘要(快速反馈) + JSON 报告(可纳入 git 做版本对比)
  */
 
