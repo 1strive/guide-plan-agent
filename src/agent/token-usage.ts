@@ -1,3 +1,5 @@
+import type { AppConfig } from '../config.js'
+
 export type TokenUsage = {
   promptTokens: number
   completionTokens: number
@@ -18,4 +20,19 @@ export function accumulateUsage(base: TokenUsage | null, next: TokenUsage): Toke
     completionTokens: (base?.completionTokens ?? 0) + next.completionTokens,
     totalTokens: (base?.totalTokens ?? 0) + next.totalTokens
   }
+}
+
+/**
+ * Task 1.2 / 4.1.C — 按 MODEL_PRICE_INPUT_PER_1K / OUTPUT_PER_1K 算 cost(USD)
+ *
+ * 八股:08-工程化实践.md §2 Token 成本控制
+ *
+ * 默认价格 0(`.env.example` 默认值)→ 返回 0,日志里仍出 costUsd 字段但是 0;
+ * 配置真实价格后 finalize 的 run summary 自动开始反映成本。
+ */
+export function computeCostUsd(usage: TokenUsage, config: AppConfig): number {
+  return (
+    (usage.promptTokens / 1000) * config.MODEL_PRICE_INPUT_PER_1K +
+    (usage.completionTokens / 1000) * config.MODEL_PRICE_OUTPUT_PER_1K
+  )
 }

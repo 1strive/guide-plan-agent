@@ -35,9 +35,19 @@ import {
   createToolCallArgs,
   createToolCallEnd,
   createToolCallResult,
+  createThinkingStart,
+  createThinkingContent,
+  createThinkingEnd,
   createInterrupt
 } from './ag-ui.js'
 import type { TokenUsage } from './token-usage.js'
+// Task 4.1.A:think 标签跨 chunk 切分状态机
+import {
+  createThinkSplitState,
+  feedThinkSplit,
+  flushThinkSplit,
+  type ThinkSplitState
+} from './thinkSplit.js'
 
 const ASK_USER_PREFIX = '[ASK_USER]'
 const OPTIONS_MARKER = '【选项】'
@@ -61,12 +71,20 @@ function parseAskUser(text: string): { isAskUser: boolean; question: string; opt
   return { isAskUser: true, question: question || '请补充更多信息', options }
 }
 
+// Task 4.1.B:可选 logger 接口(对齐 pino,只用 info 一层即够;不强依赖 pino,便于单测注入 stub)
+export type AdapterLogger = {
+  info(obj: Record<string, unknown>, msg?: string): void
+  warn?(obj: Record<string, unknown>, msg?: string): void
+}
+
 type Ctx = {
   threadId: string
   runId: string
   // Task 3.7:key 改 string 以兼容 destination(dest-id)与 url(url-地址)两类 source
   sourceMap: Map<string, Source>
   onUsage?: (usage: TokenUsage, round: number) => void
+  // Task 4.1.B:工具调用 timing 日志的输出 logger;未传则 silently 跳过日志
+  log?: AdapterLogger
 }
 
 /**
@@ -77,7 +95,12 @@ type LgEvent = {
   name?: string
   run_id?: string
   data?: {
-    chunk?: { content?: string | unknown }
+    // Task 4.1:additional_kwargs.reasoning_content 是 DeepSeek/xAI/OpenRouter 等"独立 reasoning 字段"协议
+    // LangChain 在 @langchain/openai/converters/completions.js:264 自动搬到这里
+    chunk?: {
+      content?: string | unknown
+      additional_kwargs?: { reasoning_content?: string }
+    }
     input?: unknown
     output?: unknown
   }
@@ -90,14 +113,23 @@ export async function* translateLangGraphStream(
 ): AsyncGenerator<AgUiEvent> {
   yield createRunStarted(ctx.threadId, ctx.runId)
 
-  // 状态机
+  // ── 状态机 ──
+  // text(对外可见的回答)
   let textStarted = false
-  let msgId = randomUUID()
-  let fullContent = ''           // 收集本轮 text(用于流末 [ASK_USER] 检测)
+  let textMsgId = randomUUID()
+  let fullContent = ''           // 仅累加 text 段(用于流末 [ASK_USER] 检测 — think 内的 [ASK_USER] 不算)
+  // thinking(reasoning 过程,跟 text 平行的事件流)
+  let thinkingStarted = false
+  let thinkingMsgId = randomUUID()
+  // Task 4.1.A:think 标签状态机(跨 chunk 缓冲)
+  let thinkSplitState: ThinkSplitState = createThinkSplitState()
+  // step 嵌套
   let inGeneratingStep = false
   let inToolStep = false
   let round = 0
   const totalUsage: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
+  // Task 4.1.B:每个 tool_call run_id → start 时间戳,end 时算 durationMs
+  const toolStart = new Map<string, { name: string; startedAt: number; argsPreview: string }>()
 
   try {
     for await (const event of stream) {
@@ -114,23 +146,90 @@ export async function* translateLangGraphStream(
           break
 
         case 'on_chat_model_stream': {
-          const chunk = data.chunk as { content?: string | unknown } | undefined
+          const chunk = data.chunk as
+            | { content?: string | unknown; additional_kwargs?: { reasoning_content?: string } }
+            | undefined
+
+          // Task 4.1.A 通道 1:LangChain 标准 reasoning_content(DeepSeek/xAI/OpenRouter 自动搬到这里)
+          // 兜底 fallback(reasoning_content): 部分协议直接挂 chunk.reasoning_content
+          const reasoning =
+            chunk?.additional_kwargs?.reasoning_content ??
+            (chunk as { reasoning_content?: string } | undefined)?.reasoning_content ??
+            null
+          if (reasoning && typeof reasoning === 'string' && reasoning.length > 0) {
+            if (!thinkingStarted) {
+              thinkingMsgId = randomUUID()
+              yield createThinkingStart(thinkingMsgId)
+              thinkingStarted = true
+            }
+            yield createThinkingContent(thinkingMsgId, reasoning)
+          }
+
+          // Task 4.1.A 通道 2:content 里内联 <think>...</think>(MiniMax 走这条)
           const content = typeof chunk?.content === 'string' ? chunk.content : ''
           if (content) {
-            if (!textStarted) {
-              msgId = randomUUID()
-              yield createTextMessageStart(msgId)
-              textStarted = true
+            const { segments, state: newState } = feedThinkSplit(thinkSplitState, content)
+            thinkSplitState = newState
+            for (const seg of segments) {
+              if (seg.kind === 'think') {
+                if (!thinkingStarted) {
+                  thinkingMsgId = randomUUID()
+                  yield createThinkingStart(thinkingMsgId)
+                  thinkingStarted = true
+                }
+                yield createThinkingContent(thinkingMsgId, seg.value)
+              } else {
+                // text 段:think 边界后接到 text → 若 thinking 还开着,先关闭
+                if (thinkingStarted) {
+                  yield createThinkingEnd(thinkingMsgId)
+                  thinkingStarted = false
+                }
+                if (!textStarted) {
+                  textMsgId = randomUUID()
+                  yield createTextMessageStart(textMsgId)
+                  textStarted = true
+                }
+                fullContent += seg.value
+                yield createTextMessageContent(textMsgId, seg.value)
+              }
             }
-            fullContent += content
-            yield createTextMessageContent(msgId, content)
           }
           break
         }
 
         case 'on_chat_model_end': {
+          // Task 4.1.A:flush thinkSplit 残留(未闭合的 <th 等)
+          const { segments } = flushThinkSplit(thinkSplitState)
+          thinkSplitState = createThinkSplitState()
+          for (const seg of segments) {
+            if (seg.kind === 'think') {
+              if (!thinkingStarted) {
+                thinkingMsgId = randomUUID()
+                yield createThinkingStart(thinkingMsgId)
+                thinkingStarted = true
+              }
+              yield createThinkingContent(thinkingMsgId, seg.value)
+            } else {
+              if (thinkingStarted) {
+                yield createThinkingEnd(thinkingMsgId)
+                thinkingStarted = false
+              }
+              if (!textStarted) {
+                textMsgId = randomUUID()
+                yield createTextMessageStart(textMsgId)
+                textStarted = true
+              }
+              fullContent += seg.value
+              yield createTextMessageContent(textMsgId, seg.value)
+            }
+          }
+          // 双流都收尾(未闭合 thinking 也要发 END,前端才能停"思考中"动画)
+          if (thinkingStarted) {
+            yield createThinkingEnd(thinkingMsgId)
+            thinkingStarted = false
+          }
           if (textStarted) {
-            yield createTextMessageEnd(msgId)
+            yield createTextMessageEnd(textMsgId)
             textStarted = false
           }
           if (inGeneratingStep) {
@@ -175,6 +274,12 @@ export async function* translateLangGraphStream(
           const toolCallId = event.run_id ?? randomUUID()
           const input = data.input
           const args = typeof input === 'string' ? input : JSON.stringify(input ?? {})
+          // Task 4.1.B:记 timing,end 时算 durationMs;args 截 200 字符防爆日志
+          toolStart.set(toolCallId, {
+            name: toolName,
+            startedAt: Date.now(),
+            argsPreview: args.length > 200 ? args.slice(0, 200) + '…' : args
+          })
           yield createToolCallStart(toolCallId, toolName)
           if (args && args !== '{}') yield createToolCallArgs(toolCallId, args)
           yield createToolCallEnd(toolCallId)
@@ -188,6 +293,23 @@ export async function* translateLangGraphStream(
             typeof output === 'string'
               ? output
               : (output as { content?: string })?.content ?? JSON.stringify(output)
+          // Task 4.1.B:输出工具调用耗时日志(runId 由 ctx.log 自带 child binding)
+          const started = toolStart.get(toolCallId)
+          if (started) {
+            const durationMs = Date.now() - started.startedAt
+            const resultStr = String(text)
+            ctx.log?.info(
+              {
+                tool: started.name,
+                toolCallId,
+                durationMs,
+                argsPreview: started.argsPreview,
+                resultPreview: resultStr.length > 200 ? resultStr.slice(0, 200) + '…' : resultStr
+              },
+              'tool finished'
+            )
+            toolStart.delete(toolCallId)
+          }
           if (inToolStep) {
             yield createStepFinished('tool_call')
             inToolStep = false

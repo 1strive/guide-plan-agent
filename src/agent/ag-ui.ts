@@ -19,6 +19,10 @@ export enum EventType {
     TOOL_CALL_ARGS = 'TOOL_CALL_ARGS',
     TOOL_CALL_END = 'TOOL_CALL_END',
     TOOL_CALL_RESULT = 'TOOL_CALL_RESULT',
+    // Task 4.1:思考过程独立化(MiniMax 等模型把 <think>...</think> 内联 content 时,adapter 拆出来发独立事件)
+    THINKING_START = 'THINKING_START',
+    THINKING_CONTENT = 'THINKING_CONTENT',
+    THINKING_END = 'THINKING_END',
 }
 
 // ─── Base Event ───
@@ -139,6 +143,25 @@ export type ToolCallResultEvent = BaseEvent & {
     role?: 'tool'
 }
 
+// ─── Thinking Events(Task 4.1) ───
+// 跟 TextMessage 完全平行:模型 reasoning 过程作为独立事件流,前端可折叠显示。
+// messageId 跟同轮的 TextMessage 不同 id;同 runId 内可能出现多次 START/END 对(交错)。
+export type ThinkingStartEvent = BaseEvent & {
+    type: EventType.THINKING_START
+    messageId: string
+}
+
+export type ThinkingContentEvent = BaseEvent & {
+    type: EventType.THINKING_CONTENT
+    messageId: string
+    delta: string
+}
+
+export type ThinkingEndEvent = BaseEvent & {
+    type: EventType.THINKING_END
+    messageId: string
+}
+
 // ─── Event Union ───
 export type AgUiEvent =
     | RunStartedEvent
@@ -153,6 +176,9 @@ export type AgUiEvent =
     | ToolCallArgsEvent
     | ToolCallEndEvent
     | ToolCallResultEvent
+    | ThinkingStartEvent
+    | ThinkingContentEvent
+    | ThinkingEndEvent
 
 // ─── 事件构造辅助函数 ───
 const ts = () => Date.now()
@@ -234,4 +260,17 @@ export function createToolCallResult(
         role: 'tool',
         timestamp: ts()
     }
+}
+
+// ─── Thinking 构造器(Task 4.1) ───
+export function createThinkingStart(messageId: string): ThinkingStartEvent {
+    return { type: EventType.THINKING_START, messageId, timestamp: ts() }
+}
+
+export function createThinkingContent(messageId: string, delta: string): ThinkingContentEvent {
+    return { type: EventType.THINKING_CONTENT, messageId, delta, timestamp: ts() }
+}
+
+export function createThinkingEnd(messageId: string): ThinkingEndEvent {
+    return { type: EventType.THINKING_END, messageId, timestamp: ts() }
 }

@@ -4,6 +4,8 @@ import * as api from "./api";
 type ChatMsg = {
   role: "user" | "assistant";
   content: string;
+  // Task 4.1.D:模型 reasoning 过程(MiniMax 的 <think> 标签内容);跟 content 平行,UI 折叠显示
+  thinking?: string;
   toolCalls?: Array<{ name: string; status: "running" | "done" }>;
   interrupt?: {
     id: string;
@@ -244,6 +246,8 @@ export default function App() {
     hasPreAssistantStub: boolean,
   ) {
     let assistantContent = "";
+    // Task 4.1.D:跟 assistantContent 平行收集模型 reasoning 过程
+    let assistantThinking = "";
     const toolCalls: Array<{ name: string; status: "running" | "done" }> = [];
     let currentInterrupt:
       | { id: string; message: string; reason: string; options?: string[] }
@@ -266,6 +270,7 @@ export default function App() {
         next[next.length - 1] = {
           role: "assistant",
           content: assistantContent,
+          thinking: assistantThinking || undefined,
           toolCalls: [...toolCalls],
         };
         return next;
@@ -283,6 +288,13 @@ export default function App() {
           case "TEXT_MESSAGE_CONTENT": {
             ensureAssistantStub();
             assistantContent += event.delta as string;
+            updateLastAssistant();
+            break;
+          }
+          // Task 4.1.D:模型 reasoning 累加;UI 用 <details> 折叠显示
+          case "THINKING_CONTENT": {
+            ensureAssistantStub();
+            assistantThinking += event.delta as string;
             updateLastAssistant();
             break;
           }
@@ -454,6 +466,35 @@ export default function App() {
             >
               {msg.interrupt && (
                 <div className="interrupt-badge">需要补充信息</div>
+              )}
+              {/* Task 4.1.D:模型 reasoning 折叠区,默认收起;无 thinking 时不渲染 */}
+              {msg.thinking && (
+                <details
+                  className="message-thinking"
+                  style={{
+                    margin: "0 0 8px 0",
+                    fontSize: "0.85em",
+                    color: "#888",
+                  }}
+                >
+                  <summary style={{ cursor: "pointer", userSelect: "none" }}>
+                    思考过程
+                  </summary>
+                  <pre
+                    style={{
+                      margin: "6px 0 0 0",
+                      padding: "8px 10px",
+                      background: "rgba(0,0,0,0.04)",
+                      borderRadius: 4,
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      fontFamily: "inherit",
+                      fontSize: "inherit",
+                    }}
+                  >
+                    {msg.thinking}
+                  </pre>
+                </details>
               )}
               <div className="message-content">{msg.content}</div>
               {msg.interrupt &&

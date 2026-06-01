@@ -42,6 +42,7 @@ import {
   updateAssistantContent,
   updateSessionStatus
 } from '../db/chatRepo.js'
+import { computeCostUsd } from './token-usage.js'
 
 export type Subscriber = {
   id: string
@@ -61,6 +62,14 @@ type RunHandle = {
   currentAssistantContent: string
   // 累计 usage,RUN_FINISHED 时一次性 update 到 agent_runs.total_tokens
   totalTokensDelta: number
+  // Task 4.1.B:trace-id 透传;child logger 已绑 runId,所有 info/warn/error 行自动出现 runId
+  log: FastifyBaseLogger
+  // Task 4.1.B:run summary 数据(finalize 时一次性 info,做"一次 Run 的 trace 索引")
+  startedAt: number
+  toolStats: { count: number; names: string[] }
+  // Task 4.1.C:累计 promptTokens / completionTokens,用于 cost 计算
+  promptTokensDelta: number
+  completionTokensDelta: number
 }
 
 const ACTIVE_STATUSES: AgentRunStatus[] = ['pending', 'running', 'cancelling']
@@ -93,8 +102,14 @@ export class RunManager {
    * 创建 Run + 启动 LangGraph + 后台 pump 事件(fire-and-forget)
    * 返回 runId,handler 立刻可以 subscribe
    */
-  async start(sessionId: string, messages: ChatMessage[]): Promise<string> {
+  async start(
+    sessionId: string,
+    messages: ChatMessage[],
+    parentLog?: FastifyBaseLogger
+  ): Promise<string> {
     const runId = randomUUID()
+    // Task 4.1.B:child logger 自动绑 runId,后续所有 handle.log.info 都带 { runId }
+    const log: FastifyBaseLogger = (parentLog ?? this.log).child({ runId })
     const handle: RunHandle = {
       runId,
       sessionId,
@@ -104,7 +119,12 @@ export class RunManager {
       abortController: new AbortController(),
       currentAssistantMessageId: null,
       currentAssistantContent: '',
-      totalTokensDelta: 0
+      totalTokensDelta: 0,
+      log,
+      startedAt: Date.now(),
+      toolStats: { count: 0, names: [] },
+      promptTokensDelta: 0,
+      completionTokensDelta: 0
     }
     this.runs.set(runId, handle)
 
@@ -124,13 +144,17 @@ export class RunManager {
         signal: handle.abortController.signal,
         onUsage: (u) => {
           handle.totalTokensDelta += u.totalTokens
-        }
+          handle.promptTokensDelta += u.promptTokens
+          handle.completionTokensDelta += u.completionTokens
+        },
+        // Task 4.1.B:把 child logger 透到 adapter,工具调用 timing 日志自动带 runId
+        log: handle.log
       }
     )
 
     // fire-and-forget;pump 内部 catch 异常
     this.pumpRun(handle, generator).catch((err) => {
-      this.log.error({ runId, err: String(err) }, 'runManager pump crashed')
+      handle.log.error({ err: String(err) }, 'runManager pump crashed')
     })
 
     return runId
@@ -233,8 +257,8 @@ export class RunManager {
     } catch (err) {
       // 如果是 cancelling 中收到 abort 错误 → cancelled;否则 failed
       finalStatus = handle.status === 'cancelling' ? 'cancelled' : 'failed'
-      this.log.warn(
-        { runId: handle.runId, err: String(err), finalStatus },
+      handle.log.warn(
+        { err: String(err), finalStatus },
         'runManager pump caught error'
       )
     } finally {
@@ -249,18 +273,25 @@ export class RunManager {
     try {
       await repoAppendEvent(this.pool, handle.runId, seq, event)
     } catch (err) {
-      this.log.error({ runId: handle.runId, seq, err: String(err) }, 'appendEvent failed')
+      handle.log.error({ seq, err: String(err) }, 'appendEvent failed')
     }
 
     // 2. 处理 assistant 消息的增量持久化
     await this.persistAssistantMessage(handle, event)
+
+    // Task 4.1.B:累加 toolStats(给 finalize 的 run summary 用)
+    if (event.type === EventType.TOOL_CALL_START) {
+      const ev = event as { toolCallName?: string }
+      handle.toolStats.count += 1
+      if (ev.toolCallName) handle.toolStats.names.push(ev.toolCallName)
+    }
 
     // 3. 广播给所有 subscriber(吞异常,避免单订阅者拖垮 pump)
     for (const sub of handle.subscribers.values()) {
       try {
         sub.onEvent(event)
       } catch (err) {
-        this.log.warn({ runId: handle.runId, err: String(err) }, 'subscriber.onEvent threw')
+        handle.log.warn({ err: String(err) }, 'subscriber.onEvent threw')
       }
     }
   }
@@ -306,7 +337,7 @@ export class RunManager {
           handle.currentAssistantContent
         )
       } catch (err) {
-        this.log.error({ runId: handle.runId, err: String(err) }, 'finalize: flush assistant failed')
+        handle.log.error({ err: String(err) }, 'finalize: flush assistant failed')
       }
     }
 
@@ -317,7 +348,7 @@ export class RunManager {
         await incrementRunTokens(this.pool, handle.runId, handle.totalTokensDelta)
       }
     } catch (err) {
-      this.log.error({ runId: handle.runId, err: String(err) }, 'finalize: DB update failed')
+      handle.log.error({ err: String(err) }, 'finalize: DB update failed')
     }
 
     // 通知所有订阅者 Run 已结束
@@ -330,7 +361,31 @@ export class RunManager {
     }
     handle.subscribers.clear()
     this.runs.delete(handle.runId)
-    this.log.info({ runId: handle.runId, status }, 'run finalized')
+
+    // Task 4.1.C:run summary — 一行结构化日志,作为"一次 Run 的 trace 索引"
+    //   字段:status / durationMs / totalTokens / costUsd / toolStats
+    //   child logger 已绑 runId,grep runId=xxx 即可拿全链路(run started → tool finished × N → run summary)
+    const durationMs = Date.now() - handle.startedAt
+    const costUsd = computeCostUsd(
+      {
+        promptTokens: handle.promptTokensDelta,
+        completionTokens: handle.completionTokensDelta,
+        totalTokens: handle.totalTokensDelta
+      },
+      this.config
+    )
+    handle.log.info(
+      {
+        status,
+        durationMs,
+        totalTokens: handle.totalTokensDelta,
+        promptTokens: handle.promptTokensDelta,
+        completionTokens: handle.completionTokensDelta,
+        costUsd: Number(costUsd.toFixed(6)),
+        toolStats: handle.toolStats
+      },
+      'run summary'
+    )
   }
 
   private isActive(status: AgentRunStatus): boolean {

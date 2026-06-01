@@ -4,7 +4,7 @@
 >
 > **本文档是活文档**——核心模块改动后必须回到 §7「维护清单」核对相关章节是否要同步更新。
 >
-> **当前对齐的开发阶段**:阶段2 已完成,**整合阶段 Task 整合-1 + 整合-2 都已完成**(LangGraph 主线 + Run-as-Resource 完整版);**Task 4.0(原 Task 3.7,web_search via Tavily)已完成**;阶段4 4.1~4.4 待启动。
+> **当前对齐的开发阶段**:阶段2 已完成,**整合阶段 Task 整合-1 + 整合-2 都已完成**(LangGraph 主线 + Run-as-Resource 完整版);**Task 4.0(原 Task 3.7,web_search via Tavily)已完成**;**Task 4.1(增强 ReAct + 可观测性)已完成** — `<think>` 标签拆 THINKING 事件、工具调用 timing 日志、run summary 一行结构化日志、前端思考过程折叠;阶段4 4.2~4.4 待启动。
 >
 > **重大决策(2026-06-01)**:**原阶段3 RAG 主体已废弃** —— 完整实现过(Task 3.1~3.6:chunker / Embedder × 4 / Chroma / RRF + lexical rerank / Xenova ONNX),实测后判定不适合旅游场景的实时性需求,改由阶段4 通过 MCP/Skills 实时调用外部工具(Tavily、高德地图、和风天气等)实现"动态 RAG"。本次提交清空 `src/rag/`、Chroma 容器、chromadb / `@xenova/transformers` 依赖;**Task 3.7 重定位为 Task 4.0**。详见 `docs/开发规划.md` 关键设计决策 #6。
 >
@@ -88,12 +88,13 @@
 | Prompts | `src/agent/prompts/` | section 化模板、版本注册、渲染插值、Few-shot prepend | 不知道 LLM 怎么调、不接 DB |
 | **Run 管理器**(Task 整合-2) | `src/agent/runManager.ts` | 进程内 Run 注册表 + 三态 abort(per-subscriber vs per-run)+ 状态机推进 + 事件 pump(写 agent_run_events、广播 subscriber、增量写 chat_messages) | 不直接接 HTTP / LangGraph;只通过 langgraph-agent 拿事件流 |
 | **Agent 主线**(Task 整合-1) | `src/agent/langgraph-agent.ts` | `runLangGraphAgent`:`langchain.createAgent` + `MemorySaver` + 工具 wrap;**被 runManager 调用** | 不写 DB、不直接接 HTTP |
-| **Agent 事件 Adapter** | `src/agent/langgraphToAgUi.ts` | 把 LangGraph `streamEvents v2` 翻译成项目原生 AG-UI 事件;[ASK_USER] 检测;sources 聚合到 RUN_FINISHED | 不知道工具细节、不写库 |
+| **Agent 事件 Adapter** | `src/agent/langgraphToAgUi.ts` | 把 LangGraph `streamEvents v2` 翻译成项目原生 AG-UI 事件;[ASK_USER] 检测;sources 聚合到 RUN_FINISHED;**Task 4.1.A think 标签拆分**(`<think>...</think>` 走 THINKING 事件,跟 TEXT 平行);**Task 4.1.B 工具调用 timing 日志** | 不知道工具细节、不写库 |
 | **Run 仓库** | `src/db/runRepo.ts` | `agent_runs`(完整状态机)+ `agent_run_events`(seq 事件流)CRUD + `markAllRunningAsFailed`(启动清理) | 不发事件、不调 LangGraph |
 | Agent 共用类型 | `src/agent/llm.ts` | 只导出 `ChatMessage` / `ResumeItem` / `TokenUsage` 类型;**整合-1 后手写实现全部删除** | 不含任何业务逻辑 |
 | Tools | `src/agent/tools.ts` | function calling 定义、工具实现(`search_destinations` / `get_destination_detail` / **`web_search`** Task 4.0)、参数 zod 校验、间接注入防御 | 不发 SSE 事件、不调 LLM |
 | Web 搜索缓存 | `src/agent/webSearchCache.ts` | Tavily 调用结果 SHA-256(query+depth) → MySQL `web_search_cache` 表,TTL 默认 24h(`WEB_SEARCH_CACHE_TTL_SECONDS`),避免烧 Tavily 免费额度 | 不调 Tavily、不知道工具语义 |
-| AG-UI 协议 | `src/agent/ag-ui.ts` | 事件类型枚举 + 构造器(RUN_STARTED / TEXT_MESSAGE_* / TOOL_CALL_* / RUN_FINISHED);**`Source` 是 discriminated union `DestinationSource \| UrlSource`**(Task 4.0) | 不含业务逻辑 |
+| AG-UI 协议 | `src/agent/ag-ui.ts` | 事件类型枚举 + 构造器(RUN_STARTED / TEXT_MESSAGE_* / TOOL_CALL_* / **THINKING_*** Task 4.1 / RUN_FINISHED);**`Source` 是 discriminated union `DestinationSource \| UrlSource`**(Task 4.0) | 不含业务逻辑 |
+| **think 切分(Task 4.1)** | `src/agent/thinkSplit.ts` | 纯函数 + 显式 state 的跨 chunk `<think>...</think>` 切分;adapter 把 think 段当 THINKING_CONTENT 事件,把外部段当 TEXT_MESSAGE_CONTENT | 不发事件、不知 AG-UI;单测覆盖 11 个边界 |
 | Sanitize 安全 | `src/agent/sanitize.ts` | `detectInjection` 入口注入检测 / `wrapUntrusted` 边界标记 / `detectSystemLeak` 出口泄露检测(纯函数) | 不发日志、不修改输入,只返回判定结果 |
 | Token Usage | `src/agent/token-usage.ts` | `estimateTokens` 兜底估算、`accumulateUsage` 累加 | 不写 DB |
 | Chat 持久化 | `src/db/chatRepo.ts` | chat_sessions / chat_messages 的 CRUD | 不知道 LLM、不调工具 |
@@ -376,6 +377,8 @@ index N+1~  │ history          │ listRecentMessages(最近 30 条,正序)
 ```
 RUN_STARTED
   → STEP_STARTED(generating)
+  // Task 4.1.A:THINKING 与 TEXT 平行流;模型可能先 think 再 answer,也可能 think/text 交错
+  →   [THINKING_START → THINKING_CONTENT × N → THINKING_END]?  ← MiniMax 把 <think>…</think> 内联 content,adapter 拆出来
   →   TEXT_MESSAGE_START
   →   TEXT_MESSAGE_CONTENT × N
   →   TEXT_MESSAGE_END
@@ -394,6 +397,13 @@ RUN_STARTED
 
 RUN_FINISHED { outcome, usage }
 ```
+
+**Task 4.1.B/C 配套日志**(`logs/app.log`,所有行自带 `runId` child binding):
+- `'run started' { sessionId, runId }`
+- `'tool finished' { tool, toolCallId, durationMs, argsPreview, resultPreview }` × N
+- `'run summary' { runId, status, durationMs, totalTokens, costUsd, toolStats: { count, names } }`
+
+grep `runId=xxxx` 即可拿一次 Run 的完整 trace。
 
 **前端解析**(`web/src/api.ts:65-80`):按行拆 SSE,识别 `data: ` 前缀,JSON.parse 后 yield;`App.tsx:99-200` switch 事件类型更新 UI。
 
@@ -609,6 +619,8 @@ LangGraph 的 `MemorySaver` / `SqliteSaver` 是**框架自身的 thread 状态�
 | 输出过滤只做"system prompt 泄露检测" | 没做 PII / 密钥 / 暴力内容过滤 | 阶段5 Task 5.5 网关层 + 项目无 PII 场景暂不紧迫 | 当前项目不涉及个人数据 |
 | sources 字段前端未消费 | RUN_FINISHED.sources 已透出(union 类型),但 web/src/App.tsx 尚未渲染"来源"标签 | 任意 web 迭代任务 | 后端契约已就位 |
 | web_search 无 key 时降级 | 未配 TAVILY_API_KEY 时模型走 SQL 兜底或如实告知用户 | 部署时配 key 即可 | 评测 `hardFailRate=0%` |
+| ~~MiniMax `<think>` 标签污染回答~~ | ✅ **Task 4.1.A 已修复**:adapter 把 `<think>...</think>` 拆成 THINKING_* 事件,前端折叠显示;text 字段不再含 think 内容 | — | thinkSplit 单测 11 种边界全通过 |
+| ~~工具调用 / Run summary 无 info 日志~~ | ✅ **Task 4.1.B + 4.1.C 已修复**:每轮 `'tool finished' { tool, durationMs, ... }` + finalize 一次 `'run summary' { runId, durationMs, totalTokens, costUsd, toolStats }` | — | 所有日志带 runId child binding,grep 可拿全链路 |
 
 ---
 

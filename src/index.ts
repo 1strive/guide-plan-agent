@@ -289,7 +289,8 @@ async function main() {
     }
 
     // Task 整合-2:启动 Run via runManager(不阻塞);拿到 runId 立刻可订阅
-    const runId = await runManager.start(sessionId, msgs)
+    // Task 4.1.B:给 runManager 传 reqLog,内部 child({ runId }) 后所有 log 自动带 runId
+    const runId = await runManager.start(sessionId, msgs, reqLog)
     reqLog.info({ runId }, 'run started')
 
     // SSE 接管

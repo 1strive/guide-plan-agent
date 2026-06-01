@@ -26,7 +26,7 @@ import type { DbPool } from '../db/pool.js'
 import { runTool } from './tools.js'
 import type { AgUiEvent, Source } from './ag-ui.js'
 import type { ChatMessage, ResumeItem, TokenUsage } from './llm.js'
-import { translateLangGraphStream } from './langgraphToAgUi.js'
+import { translateLangGraphStream, type AdapterLogger } from './langgraphToAgUi.js'
 
 // 进程内 Checkpointer 单例;thread_id = sessionId 时,LangGraph 自动管会话状态
 // 注:本任务整合-1 我们仍把完整 messages 传入(不依赖 thread 历史),
@@ -116,6 +116,8 @@ export async function* runLangGraphAgent(
   options?: {
     signal?: AbortSignal
     onUsage?: (usage: TokenUsage, round: number) => void
+    // Task 4.1.B:可选 logger,adapter 用它输出每轮工具调用 timing。runManager 启动时传入已绑 runId 的 child logger
+    log?: AdapterLogger
   }
 ): AsyncGenerator<AgUiEvent> {
   const sourceMap = new Map<string, Source>()
@@ -147,7 +149,8 @@ export async function* runLangGraphAgent(
     threadId,
     runId,
     sourceMap,
-    onUsage: options?.onUsage
+    onUsage: options?.onUsage,
+    log: options?.log
   })
 }
 
