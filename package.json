@@ -7,13 +7,14 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
-    "setup": "docker compose up -d && tsx scripts/migrate.ts && tsx scripts/seed.ts",
+    "setup": "docker compose up -d && tsx scripts/migrate.ts",
     "web:dev": "cd web && npm run dev",
     "eval": "tsx scripts/eval-prompt.ts",
     "eval:base": "tsx scripts/eval-prompt.ts --version v1_base",
     "eval:cot": "tsx scripts/eval-prompt.ts --version v2_cot",
     "eval:smoke": "tsx scripts/eval-prompt.ts --version v1_base --case ask-01 --sleep 100",
-    "eval:safe": "tsx scripts/eval-prompt.ts --version v1_base --case inj-01,inj-02,inj-03,inj-04,inj-05"
+    "eval:safe": "tsx scripts/eval-prompt.ts --version v1_base --case inj-01,inj-02,inj-03,inj-04,inj-05",
+    "eval:plan-vs-react": "tsx scripts/eval-plan-vs-react.ts"
   },
   "engines": {
     "node": ">=20"
@@ -22,8 +23,8 @@
     "@fastify/cors": "^10.0.1",
     "@langchain/core": "^1.1.48",
     "@langchain/langgraph": "^1.3.2",
+    "@langchain/mcp-adapters": "^1.1.3",
     "@langchain/openai": "^1.4.7",
-    "@tavily/core": "^0.7.3",
     "dotenv": "^17.4.2",
     "fastify": "^5.2.0",
     "langchain": "^1.4.2",

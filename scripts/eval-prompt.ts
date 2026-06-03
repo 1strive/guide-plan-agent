@@ -12,7 +12,7 @@
  *
  * 实现要点:
  * - 串行执行:避免并发打爆 LLM rate limit,每 case 间 sleep 默认 1s
- * - knownFail 单独计数:依赖外部资源(如未配置 TAVILY_API_KEY 的 web-* case)不计入硬失败
+ * - knownFail 单独计数:依赖外部资源的 case 不计入硬失败
  * - 输出双份:控制台摘要(快速反馈) + JSON 报告(可纳入 git 做版本对比)
  */
 
@@ -23,8 +23,8 @@ loadDotenv({ path: '.env.local', override: true })
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import path from 'node:path'
 import { loadConfig } from '../src/config.js'
-import { createPool } from '../src/db/pool.js'
 import { listPromptVersions } from '../src/agent/prompts/index.js'
+import { McpManager } from '../src/mcp/client.js'
 import { TEST_CASES, type TestCase } from '../src/eval/testset.js'
 import { runForEval, type EvalResult } from '../src/eval/runner.js'
 
@@ -68,7 +68,9 @@ function fmtCheck(v: boolean | null): string {
 async function main(): Promise<void> {
   const args = parseArgs()
   const config = loadConfig()
-  const pool = createPool(config)
+  const mcpManager = new McpManager(config)
+  if (config.MCP_ENABLED) await mcpManager.init()
+  const tools = mcpManager.getTools()
 
   const cases: TestCase[] = args.caseIds
     ? TEST_CASES.filter((c) => args.caseIds!.includes(c.id))
@@ -76,7 +78,7 @@ async function main(): Promise<void> {
 
   if (cases.length === 0) {
     console.error('[eval] no cases matched, exit')
-    await pool.end()
+    await mcpManager.shutdown()
     process.exit(1)
   }
 
@@ -89,7 +91,7 @@ async function main(): Promise<void> {
     for (const caseItem of cases) {
       const prefix = `[${version}/${caseItem.id}]`
       try {
-        const result = await runForEval(pool, config, caseItem, version)
+        const result = await runForEval(config, tools, caseItem, version)
         allResults.push(result)
         const tag = result.passed ? '✓' : (result.knownFail ? '~' : '✗')
         console.log(
@@ -160,7 +162,7 @@ async function main(): Promise<void> {
   writeFileSync(outFile, JSON.stringify(report, null, 2), 'utf-8')
   console.log(`\nreport: ${outFile}`)
 
-  await pool.end()
+  await mcpManager.shutdown()
 }
 
 main().catch((err) => {

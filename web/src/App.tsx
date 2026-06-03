@@ -6,6 +6,8 @@ type ChatMsg = {
   content: string;
   // Task 4.1.D:模型 reasoning 过程(MiniMax 的 <think> 标签内容);跟 content 平行,UI 折叠显示
   thinking?: string;
+  // Task 4.2:Plan-and-Execute 模式规划阶段产出的步骤计划;只在 mode='plan' 时出现
+  plan?: api.PlanData;
   toolCalls?: Array<{ name: string; status: "running" | "done" }>;
   interrupt?: {
     id: string;
@@ -27,6 +29,8 @@ export default function App() {
     reason: string;
     options?: string[];
   } | null>(null);
+  // Task 4.2:Agent 运行模式;UI 选择,handleSend 传给 api;切换会话不重置(全局偏好)
+  const [mode, setMode] = useState<api.AgentMode>("react");
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // Task 整合-2:streamCtrlRef abort 后**仅前端断开 SSE**,后端 Run 继续跑 + 持续写库;
@@ -196,7 +200,8 @@ export default function App() {
         ]
       : undefined;
 
-    const stream = api.sendMessageStream(activeId!, text, resume, ctl.signal);
+    // Task 4.2:把当前 UI 选的 mode 传给后端
+    const stream = api.sendMessageStream(activeId!, text, resume, ctl.signal, mode);
     await consumeStream(stream, ctl, /* hasPreAssistantStub */ true);
   }
 
@@ -230,6 +235,9 @@ export default function App() {
         },
       ],
       ctl.signal,
+      // Task 4.2:resume 续答时复用同一 mode(虽然 plan 模式跟反问场景天然冲突,
+      // 但 UI 不强制覆盖,让用户的选择保持一致)
+      mode,
     );
     void consumeStream(stream, ctl, /* hasPreAssistantStub */ true);
   }
@@ -248,6 +256,8 @@ export default function App() {
     let assistantContent = "";
     // Task 4.1.D:跟 assistantContent 平行收集模型 reasoning 过程
     let assistantThinking = "";
+    // Task 4.2:plan 模式下规划阶段产出的 plan(整个对象,渲染时展开 rationale + steps)
+    let assistantPlan: api.PlanData | undefined;
     const toolCalls: Array<{ name: string; status: "running" | "done" }> = [];
     let currentInterrupt:
       | { id: string; message: string; reason: string; options?: string[] }
@@ -271,6 +281,7 @@ export default function App() {
           role: "assistant",
           content: assistantContent,
           thinking: assistantThinking || undefined,
+          plan: assistantPlan,
           toolCalls: [...toolCalls],
         };
         return next;
@@ -295,6 +306,13 @@ export default function App() {
           case "THINKING_CONTENT": {
             ensureAssistantStub();
             assistantThinking += event.delta as string;
+            updateLastAssistant();
+            break;
+          }
+          // Task 4.2:Plan-and-Execute 规划阶段产出;UI 在最终回答上方渲染步骤清单
+          case "PLAN_GENERATED": {
+            ensureAssistantStub();
+            assistantPlan = event.plan as api.PlanData;
             updateLastAssistant();
             break;
           }
@@ -496,6 +514,51 @@ export default function App() {
                   </pre>
                 </details>
               )}
+              {/* Task 4.2:Plan-and-Execute 模式的计划清单;默认展开(用户主动选 plan 模式,通常想看计划) */}
+              {msg.plan && (
+                <details
+                  className="message-plan"
+                  open
+                  style={{
+                    margin: "0 0 8px 0",
+                    fontSize: "0.85em",
+                    border: "1px solid rgba(0,0,0,0.1)",
+                    borderRadius: 4,
+                    padding: "6px 10px",
+                    background: "rgba(0,120,200,0.04)",
+                  }}
+                >
+                  <summary
+                    style={{
+                      cursor: "pointer",
+                      userSelect: "none",
+                      fontWeight: 500,
+                    }}
+                  >
+                    执行计划({msg.plan.steps.length} 步)
+                  </summary>
+                  <div style={{ margin: "6px 0 4px 0", color: "#666" }}>
+                    {msg.plan.rationale}
+                  </div>
+                  <ol style={{ margin: "4px 0 0 0", paddingLeft: 20 }}>
+                    {msg.plan.steps.map((step) => (
+                      <li key={step.id} style={{ marginBottom: 4 }}>
+                        <span>{step.goal}</span>{" "}
+                        <code
+                          style={{
+                            fontSize: "0.9em",
+                            background: "rgba(0,0,0,0.05)",
+                            padding: "1px 4px",
+                            borderRadius: 2,
+                          }}
+                        >
+                          {step.tool}
+                        </code>
+                      </li>
+                    ))}
+                  </ol>
+                </details>
+              )}
               <div className="message-content">{msg.content}</div>
               {msg.interrupt &&
                 msg.interrupt.options &&
@@ -535,6 +598,47 @@ export default function App() {
           <div ref={chatEndRef} />
         </div>
 
+        {/* Task 4.2:Agent 模式切换;sending 中禁用避免改一半 */}
+        <div
+          className="mode-row"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "6px 16px 0",
+            fontSize: "0.85em",
+            color: "#666",
+          }}
+        >
+          <span>Agent 模式:</span>
+          {(["react", "plan"] as const).map((m) => (
+            <label
+              key={m}
+              style={{
+                cursor: sending ? "not-allowed" : "pointer",
+                opacity: sending ? 0.5 : 1,
+                userSelect: "none",
+              }}
+              title={
+                m === "react"
+                  ? "ReAct:边想边调工具,多轮 LLM 交错(默认,适合简单/反问场景)"
+                  : "Plan-and-Execute:先规划再执行,适合复杂多步任务(token 平均省 19%)"
+              }
+            >
+              <input
+                type="radio"
+                name="agent-mode"
+                value={m}
+                checked={mode === m}
+                onChange={() => setMode(m)}
+                disabled={sending}
+                style={{ marginRight: 4 }}
+              />
+              {m === "react" ? "ReAct" : "Plan-and-Execute"}
+            </label>
+          ))}
+        </div>
+
         <div className="input-row">
           <input
             value={input}
@@ -544,7 +648,7 @@ export default function App() {
               pendingInterrupt
                 ? `请回答：${pendingInterrupt.message}`
                 : activeId
-                  ? "输入消息…"
+                  ? `输入消息…(当前 ${mode === "plan" ? "Plan" : "ReAct"} 模式)`
                   : "请先创建会话"
             }
             disabled={!activeId || sending}

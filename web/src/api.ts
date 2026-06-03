@@ -84,17 +84,37 @@ export type AgUiEvent = {
     [key: string]: unknown
 }
 
+// Task 4.2:Agent 运行模式;'react' = 默认 ReAct 主循环,'plan' = Plan-and-Execute
+export type AgentMode = 'react' | 'plan'
+
+// Task 4.2:PLAN_GENERATED 事件载荷;plan 模式下规划阶段产出
+export type PlanStep = {
+    id: string
+    goal: string
+    tool: string
+    args: Record<string, unknown>
+}
+export type PlanData = {
+    rationale: string
+    steps: PlanStep[]
+}
+
 // 八股 08-工程化实践.md §1 容错:signal 让调用方可在切换/删除会话时主动 abort
 // 注:整合-2 后 abort 只是"前端断开 SSE",后端 Run 继续跑,不再终止
+// Task 4.2:mode 参数;未传走 'react'(后端默认),前端可在 UI 切换
 export async function* sendMessageStream(
     sessionId: string,
     message: string,
     resume?: ResumeItem[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    mode?: AgentMode
 ): AsyncGenerator<AgUiEvent> {
     const body: Record<string, unknown> = { message }
     if (resume && resume.length > 0) {
         body.resume = resume
+    }
+    if (mode) {
+        body.mode = mode
     }
     const res = await fetch(`${BASE}/sessions/${sessionId}/stream`, {
         method: 'POST',

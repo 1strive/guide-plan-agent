@@ -24,6 +24,9 @@ import { getPrompt } from './agent/prompts/index.js'
 import { type ChatMessage } from './agent/llm.js'
 import { detectInjection, wrapUntrusted, detectSystemLeak } from './agent/sanitize.js'
 import { RunManager } from './agent/runManager.js'
+import { McpManager } from './mcp/client.js'
+import { getAllSkills, buildSkillsPromptSection } from './skills/loader.js'
+import { getSessionSummary } from './db/chatRepo.js'
 import { getRunById, queryEventsAfter } from './db/runRepo.js'
 import type { AgUiEvent } from './agent/ag-ui.js'
 import { EventType, type RunFinishedEvent, type TextMessageContentEvent } from './agent/ag-ui.js'
@@ -51,9 +54,20 @@ async function main() {
 
   await app.register(cors, { origin: true })
 
+  // Task 4.4:MCP 工具管理器 — 启动所有配置的 MCP Server,获取可用工具列表
+  const mcpManager = new McpManager(config)
+  if (config.MCP_ENABLED) {
+    await mcpManager.init()
+    app.log.info({ tools: mcpManager.getToolNames() }, 'MCP servers initialized')
+  }
+
   // Task 整合-2:进程内 Run 注册表;cleanupOnStartup 清理上次残留的 running 状态
-  const runManager = new RunManager(pool, config, app.log)
+  const runManager = new RunManager(pool, config, app.log, mcpManager)
   await runManager.cleanupOnStartup()
+
+  // Task 4.4:Skills — 启动时加载,生成 prompt 段落
+  const skills = getAllSkills()
+  const skillsPrompt = buildSkillsPromptSection(skills, mcpManager.getToolNames())
 
   app.get('/health', async (_req, reply) => {
     try {
@@ -221,11 +235,14 @@ async function main() {
    */
   app.post<{
     Params: { id: string }
-    Body: { message?: string; promptVersion?: string }
+    // Task 4.2:body 加 mode,默认 react(向后兼容)
+    Body: { message?: string; promptVersion?: string; mode?: 'react' | 'plan' }
   }>('/sessions/:id/stream', async (req, reply) => {
     const sessionId = req.params.id
     const message = req.body?.message?.trim()
     const promptVersion = req.body?.promptVersion ?? config.PROMPT_VERSION
+    // Task 4.2:未指定 / 非法值都走 react,plan 必须显式声明
+    const mode: 'react' | 'plan' = req.body?.mode === 'plan' ? 'plan' : 'react'
 
     if (!message) {
       reply.status(400)
@@ -261,8 +278,12 @@ async function main() {
       )
     }
 
-    // Task 2.1 + 2.2:取 prompt + Few-shot prepend
-    const prompt = getPrompt(promptVersion)
+    // Task 4.3:注入记忆摘要;Task 4.4:注入 Skills 上下文
+    const sessionSummary = await getSessionSummary(pool, sessionId)
+    const prompt = getPrompt(promptVersion, {
+      memory_summary: sessionSummary ?? '',
+      skills_context: skillsPrompt
+    })
     reqLog.info({ promptVersion }, 'using prompt version')
     const msgs: ChatMessage[] = [{ role: 'system', content: prompt.system }]
     for (const m of prompt.prependMessages) {
@@ -290,8 +311,9 @@ async function main() {
 
     // Task 整合-2:启动 Run via runManager(不阻塞);拿到 runId 立刻可订阅
     // Task 4.1.B:给 runManager 传 reqLog,内部 child({ runId }) 后所有 log 自动带 runId
-    const runId = await runManager.start(sessionId, msgs, reqLog)
-    reqLog.info({ runId }, 'run started')
+    // Task 4.2:mode 决定走 ReAct (默认) 还是 Plan-and-Execute
+    const runId = await runManager.start(sessionId, msgs, reqLog, mode)
+    reqLog.info({ runId, mode }, 'run started')
 
     // SSE 接管
     reply.hijack()
@@ -368,6 +390,7 @@ async function main() {
     app.log.info({ signal }, 'shutting down')
     try {
       await app.close()
+      await mcpManager.shutdown()
       await pool.end()
     } catch (err) {
       app.log.error({ err }, 'shutdown error')

@@ -24,6 +24,10 @@ import type { AgUiEvent } from './ag-ui.js'
 import { EventType, type RunFinishedEvent, type TextMessageContentEvent } from './ag-ui.js'
 import type { ChatMessage, TokenUsage } from './llm.js'
 import { runLangGraphAgent } from './langgraph-agent.js'
+import { runPlannerAgent } from './planner.js'
+import { maybeUpdateMemory } from './memory.js'
+// Task 4.4:MCP 工具管理器
+import type { McpManager } from '../mcp/client.js'
 import {
   appendEvent as repoAppendEvent,
   createRun,
@@ -50,6 +54,9 @@ export type Subscriber = {
   onEnd: () => void
 }
 
+// Task 4.2:Agent 运行模式
+export type RunMode = 'react' | 'plan'
+
 type RunHandle = {
   runId: string
   sessionId: string
@@ -70,6 +77,10 @@ type RunHandle = {
   // Task 4.1.C:累计 promptTokens / completionTokens,用于 cost 计算
   promptTokensDelta: number
   completionTokensDelta: number
+  // Task 4.2:Agent 模式
+  mode: RunMode
+  // Task 4.3:保存 messages 给 finalize 时的记忆摘要用
+  messages: ChatMessage[]
 }
 
 const ACTIVE_STATUSES: AgentRunStatus[] = ['pending', 'running', 'cancelling']
@@ -80,7 +91,9 @@ export class RunManager {
   constructor(
     private pool: DbPool,
     private config: AppConfig,
-    private log: FastifyBaseLogger
+    private log: FastifyBaseLogger,
+    // Task 4.4:MCP 工具管理器,getTools() 返回 LangChain StructuredTool[]
+    private mcpManager: McpManager
   ) {}
 
   /**
@@ -105,11 +118,13 @@ export class RunManager {
   async start(
     sessionId: string,
     messages: ChatMessage[],
-    parentLog?: FastifyBaseLogger
+    parentLog?: FastifyBaseLogger,
+    mode: RunMode = 'react'
   ): Promise<string> {
     const runId = randomUUID()
     // Task 4.1.B:child logger 自动绑 runId,后续所有 handle.log.info 都带 { runId }
-    const log: FastifyBaseLogger = (parentLog ?? this.log).child({ runId })
+    // Task 4.2:同时绑 mode,所有日志行自动带 mode 标签
+    const log: FastifyBaseLogger = (parentLog ?? this.log).child({ runId, mode })
     const handle: RunHandle = {
       runId,
       sessionId,
@@ -124,7 +139,9 @@ export class RunManager {
       startedAt: Date.now(),
       toolStats: { count: 0, names: [] },
       promptTokensDelta: 0,
-      completionTokensDelta: 0
+      completionTokensDelta: 0,
+      mode,
+      messages
     }
     this.runs.set(runId, handle)
 
@@ -133,24 +150,39 @@ export class RunManager {
     await updateRunStatus(this.pool, runId, 'running')
     handle.status = 'running'
 
-    const generator = runLangGraphAgent(
-      this.pool,
-      this.config,
-      messages,
-      sessionId, // threadId 用 sessionId,让 LangGraph 内部按会话管 thread
-      runId,
-      undefined,
-      {
-        signal: handle.abortController.signal,
-        onUsage: (u) => {
-          handle.totalTokensDelta += u.totalTokens
-          handle.promptTokensDelta += u.promptTokens
-          handle.completionTokensDelta += u.completionTokens
-        },
-        // Task 4.1.B:把 child logger 透到 adapter,工具调用 timing 日志自动带 runId
-        log: handle.log
-      }
-    )
+    const agentOptions = {
+      signal: handle.abortController.signal,
+      onUsage: (u: TokenUsage) => {
+        handle.totalTokensDelta += u.totalTokens
+        handle.promptTokensDelta += u.promptTokens
+        handle.completionTokensDelta += u.completionTokens
+      },
+      // Task 4.1.B:把 child logger 透到 adapter,工具调用 timing 日志自动带 runId
+      log: handle.log
+    }
+
+    // Task 4.4:MCP 工具列表由 McpManager 提供,运行时动态发现
+    const tools = this.mcpManager.getTools()
+    const generator =
+      mode === 'plan'
+        ? runPlannerAgent(
+            this.config,
+            tools,
+            messages,
+            sessionId,
+            runId,
+            undefined,
+            agentOptions
+          )
+        : runLangGraphAgent(
+            this.config,
+            tools,
+            messages,
+            sessionId,
+            runId,
+            undefined,
+            agentOptions
+          )
 
     // fire-and-forget;pump 内部 catch 异常
     this.pumpRun(handle, generator).catch((err) => {
@@ -377,6 +409,9 @@ export class RunManager {
     handle.log.info(
       {
         status,
+        // mode 已经在 child binding 里(start 时 child({runId, mode})),
+        // 这里冗余写一次让"run summary"行单独 grep 时更直观
+        mode: handle.mode,
         durationMs,
         totalTokens: handle.totalTokensDelta,
         promptTokens: handle.promptTokensDelta,
@@ -386,6 +421,12 @@ export class RunManager {
       },
       'run summary'
     )
+
+    // Task 4.3:记忆分层 — Run 正常完成后异步生成对话摘要(fire-and-forget)
+    if (status === 'completed' || status === 'interrupted') {
+      maybeUpdateMemory(this.pool, this.config, handle.sessionId, handle.messages, handle.log)
+        .catch((err) => handle.log.error({ err: String(err) }, 'memory update failed'))
+    }
   }
 
   private isActive(status: AgentRunStatus): boolean {

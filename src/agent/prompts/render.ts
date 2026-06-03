@@ -33,6 +33,16 @@ export function renderPrompt(
   if (template.taskScope) {
     sections.push(interpolate(template.taskScope, vars))
   }
+  // Task 4.3:记忆上下文(interpolate 后为空则跳过,不污染无记忆的 prompt)
+  if (template.memoryContext) {
+    const rendered = interpolate(template.memoryContext, vars).trim()
+    if (rendered) sections.push(rendered)
+  }
+  // Task 4.4:技能上下文
+  if (template.skillsContext) {
+    const rendered = interpolate(template.skillsContext, vars).trim()
+    if (rendered) sections.push(rendered)
+  }
   if (template.toolUsageRules && template.toolUsageRules.length > 0) {
     sections.push(
       renderRuleList(

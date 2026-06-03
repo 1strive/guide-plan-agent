@@ -21,7 +21,13 @@
       "Bash(node -e ' *)",
       "Read(//Users/ja/.nvm/versions/node/**)",
       "Read(//opt/homebrew/Cellar/**)",
-      "Bash(export PATH=\"/Users/ja/.nvm/versions/node/v22.22.2/bin:$PATH\")"
+      "Bash(export PATH=\"/Users/ja/.nvm/versions/node/v22.22.2/bin:$PATH\")",
+      "Bash(echo \"exit=$?\")",
+      "Bash(echo \"root exit=$?\")",
+      "WebSearch",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(npm info *)"
     ]
   }
 }

@@ -35,13 +35,14 @@ const envSchema = dbEnvSchema.extend({
   LLM_REQUEST_TIMEOUT_MS: z.coerce.number().default(60_000),
   MODEL_PRICE_INPUT_PER_1K: z.coerce.number().default(0),
   MODEL_PRICE_OUTPUT_PER_1K: z.coerce.number().default(0),
-  // Task 2.1:Prompt 版本切换;具体值由 src/agent/prompts/index.ts 的 registry 决定,
-  // 未知版本运行期会 throw(避免 enum 限定导致每加版本都要改 schema)
+  // Task 2.1:Prompt 版本切换
   PROMPT_VERSION: z.string().default('v1_base'),
-  // Task 3.7:Tavily 联网搜索;无 key 时 web_search 工具返回降级消息(不崩)
-  TAVILY_API_KEY: z.string().optional(),
-  // 缓存 TTL 默认 24h(同 query hash 命中直接复用,避免烧免费额度)
-  WEB_SEARCH_CACHE_TTL_SECONDS: z.coerce.number().default(86400)
+  // Task 4.4:MCP 总开关 + 各 server 配置
+  MCP_ENABLED: z.coerce.boolean().default(true),
+  MCP_AMAP_API_KEY: z.string().default(''),
+  MCP_FILESYSTEM_ALLOWED_DIRS: z.string().default(''),
+  // Task 4.3:记忆分层 — 会话消息数超过此阈值时触发 LLM 摘要
+  MEMORY_SUMMARY_THRESHOLD: z.coerce.number().default(20)
 })
 
 export type AppConfig = z.infer<typeof envSchema>

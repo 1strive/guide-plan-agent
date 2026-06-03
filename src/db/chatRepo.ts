@@ -165,3 +165,24 @@ export async function updateAssistantContent(
 ): Promise<void> {
   await pool.query('UPDATE chat_messages SET content = ? WHERE id = ?', [content, messageId])
 }
+
+// ─── Task 4.3:会话级记忆摘要 ────────────────────────────────────
+
+export async function updateSessionSummary(
+  pool: DbPool,
+  sessionId: string,
+  summary: string
+): Promise<void> {
+  await pool.query('UPDATE chat_sessions SET summary = ? WHERE id = ?', [summary, sessionId])
+}
+
+export async function getSessionSummary(
+  pool: DbPool,
+  sessionId: string
+): Promise<string | null> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    'SELECT summary FROM chat_sessions WHERE id = ? LIMIT 1',
+    [sessionId]
+  )
+  return (rows[0] as { summary?: string | null })?.summary ?? null
+}

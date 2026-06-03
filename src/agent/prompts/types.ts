@@ -26,8 +26,11 @@ export type PromptTemplate = {
   // 角色身份(对应八股 09 §1.3 角色段):"你是…",定义模型扮演的人格
   role: string
   // 任务边界/元说明;本项目还兼用作"防示例污染"声明
-  // (见 docs/02-实验记录/exp-02 第 2 轮 / docs/03-开发笔记/note-02 §5.3)
   taskScope?: string
+  // Task 4.3:记忆上下文模板,用 {{memory_summary}} 注入用户偏好摘要;为空时不渲染
+  memoryContext?: string
+  // Task 4.4:技能上下文模板,用 {{skills_context}} 注入可用 Skill 描述;为空时不渲染
+  skillsContext?: string
   // 工具调用规则:决定模型应该调哪个工具(对应 src/agent/tools.ts 里注册的 function),
   // render 时会自动编号 + 加 "工具调用规则:" 小标题
   toolUsageRules?: string[]

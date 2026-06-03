@@ -80,7 +80,6 @@ export type AdapterLogger = {
 type Ctx = {
   threadId: string
   runId: string
-  // Task 3.7:key 改 string 以兼容 destination(dest-id)与 url(url-地址)两类 source
   sourceMap: Map<string, Source>
   onUsage?: (usage: TokenUsage, round: number) => void
   // Task 4.1.B:工具调用 timing 日志的输出 logger;未传则 silently 跳过日志
