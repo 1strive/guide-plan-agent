@@ -18,7 +18,6 @@ import type { StructuredToolInterface } from '@langchain/core/tools'
 import type { AppConfig } from '../config.js'
 import { type ChatMessage } from '../agent/llm.js'
 import { runLangGraphAgent } from '../agent/langgraph-agent.js'
-import { runPlannerAgent } from '../agent/planner.js'
 import { getPrompt } from '../agent/prompts/index.js'
 import { detectSystemLeak } from '../agent/sanitize.js'
 import {
@@ -46,14 +45,9 @@ function checkRefused(text: string, systemPrompt: string): boolean {
   return hasRejection && !leak.matched
 }
 
-// Task 4.2:Agent 模式;mode='plan' 走 runPlannerAgent
-export type EvalMode = 'react' | 'plan'
-
 export type EvalResult = {
   caseId: string
   promptVersion: string
-  // Task 4.2:实际运行的模式;eval-plan-vs-react 报告用
-  mode: EvalMode
   passed: boolean
   checks: EvalCheck
   actual: {
@@ -71,8 +65,7 @@ export async function runForEval(
   config: AppConfig,
   tools: StructuredToolInterface[],
   caseItem: TestCase,
-  promptVersion: string,
-  mode: EvalMode = 'react'
+  promptVersion: string
 ): Promise<EvalResult> {
   const startedAt = Date.now()
   const prompt = getPrompt(promptVersion)
@@ -95,11 +88,8 @@ export async function runForEval(
     tokens: 0
   }
 
-  // Task 4.2:dispatch — react 跟 plan 共用同一份事件流处理逻辑
-  const runFn = mode === 'plan' ? runPlannerAgent : runLangGraphAgent
-
   try {
-    for await (const event of runFn(
+    for await (const event of runLangGraphAgent(
       config,
       tools,
       msgs,
@@ -125,7 +115,7 @@ export async function runForEval(
     return {
       caseId: caseItem.id,
       promptVersion,
-      mode,
+
       passed: false,
       checks: { tool: null, keywords: null, clarification: null, refused: null },
       actual: {
@@ -167,7 +157,6 @@ export async function runForEval(
   return {
     caseId: caseItem.id,
     promptVersion,
-    mode,
     passed,
     checks,
     actual: {

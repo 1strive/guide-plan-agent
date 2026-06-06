@@ -235,14 +235,11 @@ async function main() {
    */
   app.post<{
     Params: { id: string }
-    // Task 4.2:body 加 mode,默认 react(向后兼容)
-    Body: { message?: string; promptVersion?: string; mode?: 'react' | 'plan' }
+    Body: { message?: string; promptVersion?: string }
   }>('/sessions/:id/stream', async (req, reply) => {
     const sessionId = req.params.id
     const message = req.body?.message?.trim()
     const promptVersion = req.body?.promptVersion ?? config.PROMPT_VERSION
-    // Task 4.2:未指定 / 非法值都走 react,plan 必须显式声明
-    const mode: 'react' | 'plan' = req.body?.mode === 'plan' ? 'plan' : 'react'
 
     if (!message) {
       reply.status(400)
@@ -311,9 +308,8 @@ async function main() {
 
     // Task 整合-2:启动 Run via runManager(不阻塞);拿到 runId 立刻可订阅
     // Task 4.1.B:给 runManager 传 reqLog,内部 child({ runId }) 后所有 log 自动带 runId
-    // Task 4.2:mode 决定走 ReAct (默认) 还是 Plan-and-Execute
-    const runId = await runManager.start(sessionId, msgs, reqLog, mode)
-    reqLog.info({ runId, mode }, 'run started')
+    const runId = await runManager.start(sessionId, msgs, reqLog)
+    reqLog.info({ runId }, 'run started')
 
     // SSE 接管
     reply.hijack()

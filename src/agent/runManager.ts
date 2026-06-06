@@ -24,7 +24,6 @@ import type { AgUiEvent } from './ag-ui.js'
 import { EventType, type RunFinishedEvent, type TextMessageContentEvent } from './ag-ui.js'
 import type { ChatMessage, TokenUsage } from './llm.js'
 import { runLangGraphAgent } from './langgraph-agent.js'
-import { runPlannerAgent } from './planner.js'
 import { maybeUpdateMemory } from './memory.js'
 // Task 4.4:MCP 工具管理器
 import type { McpManager } from '../mcp/client.js'
@@ -54,9 +53,6 @@ export type Subscriber = {
   onEnd: () => void
 }
 
-// Task 4.2:Agent 运行模式
-export type RunMode = 'react' | 'plan'
-
 type RunHandle = {
   runId: string
   sessionId: string
@@ -77,8 +73,6 @@ type RunHandle = {
   // Task 4.1.C:累计 promptTokens / completionTokens,用于 cost 计算
   promptTokensDelta: number
   completionTokensDelta: number
-  // Task 4.2:Agent 模式
-  mode: RunMode
   // Task 4.3:保存 messages 给 finalize 时的记忆摘要用
   messages: ChatMessage[]
 }
@@ -118,13 +112,11 @@ export class RunManager {
   async start(
     sessionId: string,
     messages: ChatMessage[],
-    parentLog?: FastifyBaseLogger,
-    mode: RunMode = 'react'
+    parentLog?: FastifyBaseLogger
   ): Promise<string> {
     const runId = randomUUID()
     // Task 4.1.B:child logger 自动绑 runId,后续所有 handle.log.info 都带 { runId }
-    // Task 4.2:同时绑 mode,所有日志行自动带 mode 标签
-    const log: FastifyBaseLogger = (parentLog ?? this.log).child({ runId, mode })
+    const log: FastifyBaseLogger = (parentLog ?? this.log).child({ runId })
     const handle: RunHandle = {
       runId,
       sessionId,
@@ -140,7 +132,6 @@ export class RunManager {
       toolStats: { count: 0, names: [] },
       promptTokensDelta: 0,
       completionTokensDelta: 0,
-      mode,
       messages
     }
     this.runs.set(runId, handle)
@@ -163,18 +154,7 @@ export class RunManager {
 
     // Task 4.4:MCP 工具列表由 McpManager 提供,运行时动态发现
     const tools = this.mcpManager.getTools()
-    const generator =
-      mode === 'plan'
-        ? runPlannerAgent(
-            this.config,
-            tools,
-            messages,
-            sessionId,
-            runId,
-            undefined,
-            agentOptions
-          )
-        : runLangGraphAgent(
+    const generator = runLangGraphAgent(
             this.config,
             tools,
             messages,
@@ -409,9 +389,6 @@ export class RunManager {
     handle.log.info(
       {
         status,
-        // mode 已经在 child binding 里(start 时 child({runId, mode})),
-        // 这里冗余写一次让"run summary"行单独 grep 时更直观
-        mode: handle.mode,
         durationMs,
         totalTokens: handle.totalTokensDelta,
         promptTokens: handle.promptTokensDelta,

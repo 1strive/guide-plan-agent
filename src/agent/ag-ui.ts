@@ -23,8 +23,6 @@ export enum EventType {
     THINKING_START = 'THINKING_START',
     THINKING_CONTENT = 'THINKING_CONTENT',
     THINKING_END = 'THINKING_END',
-    // Task 4.2:Plan-and-Execute 模式 — 规划阶段产出的步骤计划(JSON);前端可选渲染,持久化便于 trace
-    PLAN_GENERATED = 'PLAN_GENERATED',
 }
 
 // ─── Base Event ───
@@ -131,24 +129,6 @@ export type ToolCallResultEvent = BaseEvent & {
     role?: 'tool'
 }
 
-// ─── Plan Events(Task 4.2) ───
-// Plan-and-Execute 模式规划阶段输出。每个 step 对应执行阶段的 1 次 runTool 调用。
-// 后续阶段的 TOOL_CALL_* / TEXT_MESSAGE_* 事件跟 ReAct 完全一致,前端 0 改动。
-export type PlanStep = {
-    id: string
-    goal: string
-    tool: string                  // 工具名(必须是已注册工具)
-    args: Record<string, unknown> // 工具参数(完整值,不支持引用前一步)
-}
-
-export type PlanGeneratedEvent = BaseEvent & {
-    type: EventType.PLAN_GENERATED
-    plan: {
-        rationale: string
-        steps: PlanStep[]
-    }
-}
-
 // ─── Thinking Events(Task 4.1) ───
 // 跟 TextMessage 完全平行:模型 reasoning 过程作为独立事件流,前端可折叠显示。
 // messageId 跟同轮的 TextMessage 不同 id;同 runId 内可能出现多次 START/END 对(交错)。
@@ -185,7 +165,6 @@ export type AgUiEvent =
     | ThinkingStartEvent
     | ThinkingContentEvent
     | ThinkingEndEvent
-    | PlanGeneratedEvent
 
 // ─── 事件构造辅助函数 ───
 const ts = () => Date.now()
@@ -282,7 +261,3 @@ export function createThinkingEnd(messageId: string): ThinkingEndEvent {
     return { type: EventType.THINKING_END, messageId, timestamp: ts() }
 }
 
-// ─── Plan 构造器(Task 4.2) ───
-export function createPlanGenerated(plan: PlanGeneratedEvent['plan']): PlanGeneratedEvent {
-    return { type: EventType.PLAN_GENERATED, plan, timestamp: ts() }
-}
