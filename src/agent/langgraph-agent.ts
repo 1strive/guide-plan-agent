@@ -58,6 +58,17 @@ export async function* runLangGraphAgent(
   const otherMsgs = messages.filter((m) => m.role !== 'system')
   const systemPrompt = systemMsg && typeof systemMsg.content === 'string' ? systemMsg.content : undefined
 
+  options?.log?.info(
+    {
+      model: config.OPENAI_MODEL,
+      toolCount: tools.length,
+      toolNames: tools.map(t => t.name),
+      systemPrompt,
+      messageCount: otherMsgs.length
+    },
+    'ja 调用'
+  )
+
   const agent = createAgent({
     model,
     tools,

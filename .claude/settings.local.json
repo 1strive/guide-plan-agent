@@ -29,7 +29,21 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(npm info *)",
       "Bash(npm config *)",
-      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(k,v\\) for k,v in {**d.get\\('dependencies',{}\\), **d.get\\('devDependencies',{}\\)}.items\\(\\) if 'anthropic' in k.lower\\(\\) or 'mcp' in k.lower\\(\\)]\")"
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(k,v\\) for k,v in {**d.get\\('dependencies',{}\\), **d.get\\('devDependencies',{}\\)}.items\\(\\) if 'anthropic' in k.lower\\(\\) or 'mcp' in k.lower\\(\\)]\")",
+      "Bash(mysql *)",
+      "Bash(npm search *)",
+      "Bash(npm view *)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('error','found'\\)\\); [print\\(k\\) for k in list\\(d.get\\('versions',{}\\).keys\\(\\)\\)[:3]]\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('error','found'\\)\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('name','?'\\), d.get\\('description','?'\\)[:80] if 'description' in d else d.get\\('error','?'\\)\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('name'\\), d.get\\('version'\\), d.get\\('description',''\\)[:100]\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('name','?'\\), d.get\\('error',''\\)\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('name','?'\\), d.get\\('version','?'\\), d.get\\('description',''\\)[:80]\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('name','?'\\), d.get\\('version','?'\\), d.get\\('description',''\\)[:120]\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('name','?'\\), d.get\\('version','?'\\)\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('error', d.get\\('name','?'\\)\\)\\)\")",
+      "WebFetch(domain:lbs.amap.com)",
+      "Bash(grep -iA3 \"npx\\\\|command\\\\|amap.*mcp\\\\|AMAP_MAPS_API_KEY\\\\|env\\\\|args\")"
     ]
   }
 }

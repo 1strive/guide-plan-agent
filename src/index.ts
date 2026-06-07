@@ -25,7 +25,6 @@ import { type ChatMessage } from './agent/llm.js'
 import { detectInjection, wrapUntrusted, detectSystemLeak } from './agent/sanitize.js'
 import { RunManager } from './agent/runManager.js'
 import { McpManager } from './mcp/client.js'
-import { getAllSkills, buildSkillsPromptSection } from './skills/loader.js'
 import { getSessionSummary } from './db/chatRepo.js'
 import { getRunById, queryEventsAfter } from './db/runRepo.js'
 import type { AgUiEvent } from './agent/ag-ui.js'
@@ -55,7 +54,7 @@ async function main() {
   await app.register(cors, { origin: true })
 
   // Task 4.4:MCP 工具管理器 — 启动所有配置的 MCP Server,获取可用工具列表
-  const mcpManager = new McpManager(config)
+  const mcpManager = new McpManager(config, app.log)
   if (config.MCP_ENABLED) {
     await mcpManager.init()
     app.log.info({ tools: mcpManager.getToolNames() }, 'MCP servers initialized')
@@ -65,9 +64,6 @@ async function main() {
   const runManager = new RunManager(pool, config, app.log, mcpManager)
   await runManager.cleanupOnStartup()
 
-  // Task 4.4:Skills — 启动时加载,生成 prompt 段落
-  const skills = getAllSkills()
-  const skillsPrompt = buildSkillsPromptSection(skills, mcpManager.getToolNames())
 
   app.get('/health', async (_req, reply) => {
     try {
@@ -267,7 +263,7 @@ async function main() {
 
     // 持久化 user 消息(原始),首条自动生成 title
     await insertMessage(pool, sessionId, 'user', message)
-    const history = await listRecentMessages(pool, sessionId, config.CHAT_HISTORY_LIMIT)
+    const history = await listRecentMessages(pool, sessionId, config.CHAT_HISTORY_LIMIT) //取对应会话的前CHAT_HISTORY_LIMIT条历史数据
     if (history.filter((h) => h.role === 'user').length === 1) {
       const title = message.length > 30 ? message.slice(0, 30) + '…' : message
       updateSessionTitle(pool, sessionId, title).catch((err) =>
@@ -275,13 +271,12 @@ async function main() {
       )
     }
 
-    // Task 4.3:注入记忆摘要;Task 4.4:注入 Skills 上下文
+    // Task 4.3:注入记忆摘要
     const sessionSummary = await getSessionSummary(pool, sessionId)
     const prompt = getPrompt(promptVersion, {
-      memory_summary: sessionSummary ?? '',
-      skills_context: skillsPrompt
+      memory_summary: sessionSummary ?? ''
     })
-    reqLog.info({ promptVersion }, 'using prompt version')
+    reqLog.info({ promptVersion, prompt, sessionSummary }, 'using prompt version')
     const msgs: ChatMessage[] = [{ role: 'system', content: prompt.system }]
     for (const m of prompt.prependMessages) {
       msgs.push(

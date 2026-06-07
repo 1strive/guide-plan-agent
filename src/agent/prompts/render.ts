@@ -38,11 +38,6 @@ export function renderPrompt(
     const rendered = interpolate(template.memoryContext, vars).trim()
     if (rendered) sections.push(rendered)
   }
-  // Task 4.4:技能上下文
-  if (template.skillsContext) {
-    const rendered = interpolate(template.skillsContext, vars).trim()
-    if (rendered) sections.push(rendered)
-  }
   if (template.toolUsageRules && template.toolUsageRules.length > 0) {
     sections.push(
       renderRuleList(

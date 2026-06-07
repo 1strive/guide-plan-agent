@@ -29,8 +29,6 @@ export type PromptTemplate = {
   taskScope?: string
   // Task 4.3:记忆上下文模板,用 {{memory_summary}} 注入用户偏好摘要;为空时不渲染
   memoryContext?: string
-  // Task 4.4:技能上下文模板,用 {{skills_context}} 注入可用 Skill 描述;为空时不渲染
-  skillsContext?: string
   // 工具调用规则:决定模型应该调哪个工具(对应 src/agent/tools.ts 里注册的 function),
   // render 时会自动编号 + 加 "工具调用规则:" 小标题
   toolUsageRules?: string[]

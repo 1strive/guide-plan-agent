@@ -15,6 +15,7 @@
 
 import { MultiServerMCPClient } from '@langchain/mcp-adapters'
 import type { StructuredToolInterface } from '@langchain/core/tools'
+import type { FastifyBaseLogger } from 'fastify'
 import type { AppConfig } from '../config.js'
 
 type StdioServerConfig = {
@@ -24,22 +25,28 @@ type StdioServerConfig = {
   env?: Record<string, string>
 }
 
-type McpServersConfig = Record<string, StdioServerConfig>
+type HttpServerConfig = {
+  transport: 'http'
+  url: string
+}
+
+type McpServerConfig = StdioServerConfig | HttpServerConfig
+type McpServersConfig = Record<string, McpServerConfig>
 
 export class McpManager {
   private client: MultiServerMCPClient | null = null
   private tools: StructuredToolInterface[] = []
 
-  constructor(private config: AppConfig) {}
+  constructor(private config: AppConfig, private log?: FastifyBaseLogger) { }
 
   async init(): Promise<void> {
     const mcpServers: McpServersConfig = {}
 
-    // 1. @anthropic/mcp-server-fetch — 通用网页抓取,始终启用
-    mcpServers['fetch'] = {
+    // 1. @modelcontextprotocol/server-puppeteer — 浏览器自动化(导航/截图/点击/执行JS)
+    mcpServers['puppeteer'] = {
       transport: 'stdio',
       command: 'npx',
-      args: ['-y', '@anthropic/mcp-server-fetch']
+      args: ['-y', '@modelcontextprotocol/server-puppeteer']
     }
 
     // 2. @modelcontextprotocol/server-filesystem — 本地文件访问
@@ -54,15 +61,16 @@ export class McpManager {
       }
     }
 
-    // 3. 高德地图 MCP — POI 搜索、天气、路线规划
+    // 3. 高德地图 MCP — Streamable HTTP 方式(推荐,无需本地 npx / Node 版本要求)
+    //    文档:https://lbs.amap.com/api/mcp-server/gettingstarted
     if (this.config.MCP_AMAP_API_KEY) {
       mcpServers['amap'] = {
-        transport: 'stdio',
-        command: 'npx',
-        args: ['-y', '@amap/amap-maps-mcp-server'],
-        env: { AMAP_MAPS_API_KEY: this.config.MCP_AMAP_API_KEY }
+        transport: 'http',
+        url: `https://mcp.amap.com/mcp?key=${this.config.MCP_AMAP_API_KEY}`
       }
     }
+
+    this.log?.info({ mcpServers }, 'MCP servers config')
 
     this.client = new MultiServerMCPClient({
       throwOnLoadError: false,
@@ -72,6 +80,7 @@ export class McpManager {
     })
 
     this.tools = await this.client.getTools()
+    this.log?.info({ tools: this.tools.map(t => t.name) }, 'MCP tools loaded')
   }
 
   getTools(): StructuredToolInterface[] {

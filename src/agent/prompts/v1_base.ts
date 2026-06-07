@@ -29,8 +29,6 @@ export const v1Base: PromptTemplate = {
   taskScope: '接下来你会看到若干 user/assistant 对话:其中**开头几轮可能是教学示例**(用于演示反问协议与回答风格),真正需要你回应的用户消息以**最末一条 user 消息**为准——不要把示例里的偏好或上下文当作当前用户的偏好。',
   // Task 4.3:记忆注入 — {{memory_summary}} 在 render 时被替换为用户偏好摘要;为空时整段跳过
   memoryContext: '用户画像(基于历史对话摘要):\n{{memory_summary}}',
-  // Task 4.4:技能注入 — {{skills_context}} 在 render 时被替换为可用 Skill 列表;为空时整段跳过
-  skillsContext: '{{skills_context}}',
   // Task 4.4:工具通过 MCP Server 动态发现,不再引用具体工具名
   toolUsageRules: [
     '你拥有多个外部工具(通过 MCP 服务器提供)。需要查询实时信息时优先使用工具,禁止凭空编造。',
@@ -69,23 +67,24 @@ export const v1Base: PromptTemplate = {
   // Task 2.2 / 八股 09 §3.1~3.5:Few-shot 示例。
   // 选材原则:避开"列举具体条目"类示例(会与 toolUsageRules[0] 冲突),
   // 只示范三件难以靠纯文字规则教会的事——反问协议格式、需求理解后的回应风格、指代消解。
+  // 示例用占位符代替具体偏好(避免模型把"某城市 / 某天数"当真实用户输入产生幻觉)
   examples: [
     {
-      user: '帮我推荐个适合周末去的地方',
+      user: '推荐个地方吧',
       assistant: `[ASK_USER]
-请问您从哪个城市出发?距离会影响我能推荐的范围。
+请问您从哪个城市出发?这会影响我能推荐的范围。
 【选项】
-1. 北京周边
-2. 上海周边
-3. 广州周边
-4. 其他城市`
+1. 华东地区
+2. 华南地区
+3. 华北地区
+4. 其他`
     },
     {
-      user: '我从上海出发,3 天时间,想看自然风光,不要太累',
-      assistant: '理解您的偏好:上海出发、3 天、自然风光、轻松节奏。我先帮您查找匹配的目的地,稍后给您具体推荐。'
+      user: '我从某城市出发,某天时间,想看某类风景',
+      assistant: '收到您的偏好。我先帮您查找匹配的目的地,稍后给您具体推荐。'
     },
     {
-      user: '其中第一个能再详细说说吗?',
+      user: '第一个能详细说说吗?',
       assistant: `[ASK_USER]
 您最关心它的哪一类详情?
 【选项】
@@ -95,5 +94,5 @@ export const v1Base: PromptTemplate = {
 4. 全部`
     }
   ],
-  variables: ['memory_summary', 'skills_context']
+  variables: ['memory_summary']
 }

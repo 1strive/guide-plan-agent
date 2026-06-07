@@ -88,7 +88,7 @@ export class RunManager {
     private log: FastifyBaseLogger,
     // Task 4.4:MCP 工具管理器,getTools() 返回 LangChain StructuredTool[]
     private mcpManager: McpManager
-  ) {}
+  ) { }
 
   /**
    * 启动时清理上次进程残留(failed)+ 同步 chat_sessions.status
@@ -136,9 +136,10 @@ export class RunManager {
     }
     this.runs.set(runId, handle)
 
-    await createRun(this.pool, runId, sessionId, 'pending')
-    await updateSessionStatus(this.pool, sessionId, 'running')
-    await updateRunStatus(this.pool, runId, 'running')
+    await createRun(this.pool, runId, sessionId, 'pending') // 插入 run 记录
+    await updateSessionStatus(this.pool, sessionId, 'running') // 会话标记为运行中
+    await updateRunStatus(this.pool, runId, 'running') // run 标记为运行中
+
     handle.status = 'running'
 
     const agentOptions = {
@@ -155,14 +156,14 @@ export class RunManager {
     // Task 4.4:MCP 工具列表由 McpManager 提供,运行时动态发现
     const tools = this.mcpManager.getTools()
     const generator = runLangGraphAgent(
-            this.config,
-            tools,
-            messages,
-            sessionId,
-            runId,
-            undefined,
-            agentOptions
-          )
+      this.config,
+      tools,
+      messages,
+      sessionId,
+      runId,
+      undefined,
+      agentOptions
+    )
 
     // fire-and-forget;pump 内部 catch 异常
     this.pumpRun(handle, generator).catch((err) => {

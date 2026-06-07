@@ -96,7 +96,7 @@ export async function maybeUpdateMemory(
     await updateSessionSummary(pool, sessionId, summary)
 
     log.info(
-      { sessionId, messageCount, summaryLength: summary.length, isUpdate: existingSummary !== null },
+      { sessionId, messageCount, messages, summaryLength: summary.length, isUpdate: existingSummary !== null },
       'memory summary generated'
     )
   } catch (err) {
