@@ -79,6 +79,15 @@ type RunHandle = {
 
 const ACTIVE_STATUSES: AgentRunStatus[] = ['pending', 'running', 'cancelling']
 
+// Task 5.1:finalize 时回调给 index.ts 的 metrics 统计
+export type OnRunFinalized = (data: {
+  runId: string
+  status: string
+  durationMs: number
+  tokens: number
+  error?: string
+}) => void
+
 export class RunManager {
   private runs = new Map<string, RunHandle>()
 
@@ -87,7 +96,9 @@ export class RunManager {
     private config: AppConfig,
     private log: FastifyBaseLogger,
     // Task 4.4:MCP 工具管理器,getTools() 返回 LangChain StructuredTool[]
-    private mcpManager: McpManager
+    private mcpManager: McpManager,
+    // Task 5.1:metrics 回调(可选)
+    private onRunFinalized?: OnRunFinalized
   ) { }
 
   /**
@@ -399,6 +410,14 @@ export class RunManager {
       },
       'run summary'
     )
+
+    // Task 5.1:metrics 回调
+    this.onRunFinalized?.({
+      runId: handle.runId,
+      status,
+      durationMs,
+      tokens: handle.totalTokensDelta
+    })
 
     // Task 4.3:记忆分层 — Run 正常完成后异步生成对话摘要(fire-and-forget)
     if (status === 'completed' || status === 'interrupted') {

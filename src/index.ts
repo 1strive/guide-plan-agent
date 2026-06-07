@@ -61,7 +61,7 @@ async function main() {
   }
 
   // Task 整合-2:进程内 Run 注册表;cleanupOnStartup 清理上次残留的 running 状态
-  const runManager = new RunManager(pool, config, app.log, mcpManager)
+  const runManager = new RunManager(pool, config, app.log, mcpManager, recordRunMetrics)
   await runManager.cleanupOnStartup()
 
 
@@ -72,6 +72,42 @@ async function main() {
     } catch (e) {
       reply.status(503)
       return { ok: false, db: false, error: String(e) }
+    }
+  })
+
+  // Task 5.1:轻量内存 metrics(不引入 Prometheus,够用就行)
+  const metrics = {
+    totalRuns: 0,
+    completedRuns: 0,
+    failedRuns: 0,
+    totalTokens: 0,
+    totalDurationMs: 0,
+    recentErrors: [] as Array<{ time: string; runId: string; error: string }>
+  }
+  // 暴露给 runManager finalize 回调更新(通过闭包)
+  function recordRunMetrics(data: { status: string; durationMs: number; tokens: number; runId: string; error?: string }) {
+    metrics.totalRuns++
+    metrics.totalDurationMs += data.durationMs
+    metrics.totalTokens += data.tokens
+    if (data.status === 'completed' || data.status === 'interrupted') metrics.completedRuns++
+    else {
+      metrics.failedRuns++
+      metrics.recentErrors.push({ time: new Date().toISOString(), runId: data.runId, error: data.error ?? data.status })
+      if (metrics.recentErrors.length > 20) metrics.recentErrors.shift()
+    }
+  }
+
+  app.get('/metrics', async () => {
+    const avgDuration = metrics.totalRuns > 0 ? Math.round(metrics.totalDurationMs / metrics.totalRuns) : 0
+    const errorRate = metrics.totalRuns > 0 ? Number((metrics.failedRuns / metrics.totalRuns).toFixed(3)) : 0
+    return {
+      totalRuns: metrics.totalRuns,
+      completedRuns: metrics.completedRuns,
+      failedRuns: metrics.failedRuns,
+      errorRate,
+      avgDurationMs: avgDuration,
+      totalTokens: metrics.totalTokens,
+      recentErrors: metrics.recentErrors.slice(-5)
     }
   })
 

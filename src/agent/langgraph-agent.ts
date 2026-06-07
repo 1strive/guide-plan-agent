@@ -22,11 +22,20 @@ import { translateLangGraphStream, type AdapterLogger } from './langgraphToAgUi.
 
 const checkpointer = new MemorySaver()
 
+/**
+ * Task 5.1:加 timeout + maxRetries,底层透传给 OpenAI SDK client。
+ * - timeout:LLM_REQUEST_TIMEOUT_MS(默认 60s),超时立刻 reject(不再等 10 分钟)
+ * - maxRetries:3 次指数退避(OpenAI SDK 内置退避逻辑,对 timeout / 5xx / 429 自动重试)
+ */
 export function buildChatModel(config: AppConfig): ChatOpenAI {
   return new ChatOpenAI({
     model: config.OPENAI_MODEL,
     apiKey: config.OPENAI_API_KEY,
-    configuration: { baseURL: config.OPENAI_BASE_URL },
+    configuration: {
+      baseURL: config.OPENAI_BASE_URL,
+      timeout: config.LLM_REQUEST_TIMEOUT_MS,
+      maxRetries: 3
+    },
     temperature: config.LLM_TEMPERATURE,
     topP: config.LLM_TOP_P,
     maxTokens: config.LLM_MAX_TOKENS,
