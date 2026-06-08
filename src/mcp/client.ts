@@ -17,6 +17,8 @@ import { MultiServerMCPClient } from '@langchain/mcp-adapters'
 import type { StructuredToolInterface } from '@langchain/core/tools'
 import type { FastifyBaseLogger } from 'fastify'
 import type { AppConfig } from '../config.js'
+import { createFlyaiTools } from './flyaiTools.js'
+import { createBuiltinTools } from './builtinTools.js'
 
 type StdioServerConfig = {
   transport: 'stdio'
@@ -79,8 +81,15 @@ export class McpManager {
       mcpServers
     })
 
-    this.tools = await this.client.getTools()
-    this.log?.info({ tools: this.tools.map(t => t.name) }, 'MCP tools loaded')
+    const mcpTools = await this.client.getTools()
+
+    // FlyAI(飞猪)旅行搜索工具 — CLI 包装
+    const flyaiTools = createFlyaiTools()
+    // 内置工具(get_current_time 等)
+    const builtinTools = createBuiltinTools()
+
+    this.tools = [...mcpTools, ...flyaiTools, ...builtinTools]
+    this.log?.info({ tools: this.tools.map(t => t.name) }, 'all tools loaded')
   }
 
   getTools(): StructuredToolInterface[] {

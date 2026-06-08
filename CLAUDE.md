@@ -25,4 +25,5 @@
 - `grep -rn "Task X.Y" src/` 能否定位到本次相关实现?
 - 改动是否同时更新了相关八股引用(若新增/重构涉及考点)?
 - 改动涉及 HTTP 路由 / `runAgentStream` / `prompts/` / `tools.ts` / `chatRepo.ts` / abort 行为等 — 是否回核 `docs/04-架构文档/agent-架构.md` 相关章节?(无需更新也请显式说明)
+- **改动涉及 `ag-ui.ts` 新增/修改事件类型 或 HTTP 接口响应结构变化 — 是否同步更新 `docs/03-开发笔记/note-05-AG-UI协议文档.md`?**(前端依赖此文档做渲染适配)
 - 类型检查通过:`npx tsc --noEmit`

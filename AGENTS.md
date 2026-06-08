@@ -119,6 +119,8 @@ req.raw.on('close', () => controller.abort())
 | 改 `chat_sessions` / `chat_messages` schema | §3.4/§3.5 + §1.2 + §6 |
 | 落地某个规划 Task | §6 局限表标记移除 + 必要时新增决策小节到 §5 |
 | 引入新模块(`eval/`、`agents/`、`mcp/`、`skills/` 等) | §1.1 分层图 + §1.2 职责表 |
+| **新增/修改 AG-UI 事件类型**(`src/agent/ag-ui.ts`) | **`docs/03-开发笔记/note-05-AG-UI协议文档.md`** 必须同步更新(§2 事件列表 + §3 时序图 + §5 渲染优先级) |
+| **新增/修改 HTTP REST 接口响应结构** | **`note-05-AG-UI协议文档.md` §4** 必须同步更新 |
 
 详细的"何时该改"对照见 [`docs/04-架构文档/agent-架构.md` §7 维护清单](./docs/04-架构文档/agent-架构.md#7-维护清单本文档应当何时更新)。
 

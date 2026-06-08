@@ -43,7 +43,8 @@
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('name','?'\\), d.get\\('version','?'\\)\\)\")",
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('error', d.get\\('name','?'\\)\\)\\)\")",
       "WebFetch(domain:lbs.amap.com)",
-      "Bash(grep -iA3 \"npx\\\\|command\\\\|amap.*mcp\\\\|AMAP_MAPS_API_KEY\\\\|env\\\\|args\")"
+      "Bash(grep -iA3 \"npx\\\\|command\\\\|amap.*mcp\\\\|AMAP_MAPS_API_KEY\\\\|env\\\\|args\")",
+      "Bash(echo \"---EXIT=$?\")"
     ]
   }
 }
