@@ -1,3 +1,3 @@
 export function TextContent({ content }: { content: string }) {
-  return <div className="message-content">{content}</div>
+  return <div>{content}</div>;
 }

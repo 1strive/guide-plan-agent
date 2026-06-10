@@ -1,36 +1,40 @@
-import { useChatStore } from '../store/chatStore'
-import { useStreamChat } from '../hooks/useStreamChat'
+import { useChatStore } from "../store/chatStore";
+import { useStreamChat } from "../hooks/useStreamChat";
+import { Button } from "../components/ui";
 
 export function InputBar() {
-  const input = useChatStore((s) => s.input)
-  const setInput = useChatStore((s) => s.setInput)
-  const sending = useChatStore((s) => s.sending)
-  const activeId = useChatStore((s) => s.activeId)
-  const pendingInterrupt = useChatStore((s) => s.pendingInterrupt)
-  const currentRunId = useChatStore((s) => s.currentRunId)
-  const { handleSend, handleStop } = useStreamChat()
+  const input = useChatStore((s) => s.input);
+  const setInput = useChatStore((s) => s.setInput);
+  const sending = useChatStore((s) => s.sending);
+  const activeId = useChatStore((s) => s.activeId);
+  const pendingInterrupt = useChatStore((s) => s.pendingInterrupt);
+  const currentRunId = useChatStore((s) => s.currentRunId);
+  const { handleSend, handleStop } = useStreamChat();
 
   function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
       if (pendingInterrupt) {
-        handleSend({ id: pendingInterrupt.id, reason: pendingInterrupt.reason })
+        handleSend({
+          id: pendingInterrupt.id,
+          reason: pendingInterrupt.reason,
+        });
       } else {
-        handleSend()
+        handleSend();
       }
     }
   }
 
   function onSendClick() {
     if (pendingInterrupt) {
-      handleSend({ id: pendingInterrupt.id, reason: pendingInterrupt.reason })
+      handleSend({ id: pendingInterrupt.id, reason: pendingInterrupt.reason });
     } else {
-      handleSend()
+      handleSend();
     }
   }
 
   return (
-    <div className="input-row">
+    <div className="flex gap-3 items-stretch">
       <input
         value={input}
         onChange={(e) => setInput(e.target.value)}
@@ -39,19 +43,25 @@ export function InputBar() {
           pendingInterrupt
             ? `请回答：${pendingInterrupt.message}`
             : activeId
-              ? '输入消息…'
-              : '请先创建会话'
+              ? "输入消息…"
+              : "请先创建会话"
         }
         disabled={!activeId || sending}
+        className="flex-1 h-12 px-4 rounded-md text-sm bg-input text-foreground placeholder:text-muted-foreground border border-border outline-none transition-colors duration-150 ease-in-out focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:opacity-60 disabled:cursor-not-allowed"
       />
       {sending && currentRunId && (
-        <button onClick={handleStop} className="btn-stop" title="主动停止当前 Run">
+        <Button
+          variant="ghost"
+          size="lg"
+          onClick={handleStop}
+          title="主动停止当前 Run"
+        >
           停止
-        </button>
+        </Button>
       )}
-      <button onClick={onSendClick} disabled={!activeId || sending}>
+      <Button size="lg" onClick={onSendClick} disabled={!activeId || sending}>
         发送
-      </button>
+      </Button>
     </div>
-  )
+  );
 }

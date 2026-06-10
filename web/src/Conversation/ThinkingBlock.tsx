@@ -1,24 +1,14 @@
+/**
+ * ThinkingBlock — 折叠的思考过程块
+ * 颜色严格走 token：底 muted、字 muted-foreground。
+ */
 export function ThinkingBlock({ thinking }: { thinking: string }) {
   return (
-    <details
-      className="message-thinking"
-      style={{ margin: '0 0 8px 0', fontSize: '0.85em', color: '#888' }}
-    >
-      <summary style={{ cursor: 'pointer', userSelect: 'none' }}>思考过程</summary>
-      <pre
-        style={{
-          margin: '6px 0 0 0',
-          padding: '8px 10px',
-          background: 'rgba(0,0,0,0.04)',
-          borderRadius: 4,
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-          fontFamily: 'inherit',
-          fontSize: 'inherit',
-        }}
-      >
+    <details className="mb-3 text-[0.85em] text-muted-foreground">
+      <summary className="cursor-pointer select-none py-1">思考过程</summary>
+      <pre className="mt-2 px-3 py-2.5 bg-muted rounded-md whitespace-pre-wrap break-words font-[inherit] text-[inherit] leading-relaxed">
         {thinking}
       </pre>
     </details>
-  )
+  );
 }
