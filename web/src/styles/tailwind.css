@@ -23,7 +23,7 @@
   --muted-foreground: #6b7280;
 
   /* ---------- Brand ---------- */
-  --primary: #0e7fbf; /* 海洋蓝 */
+  --primary: #3b82f6; /* 天空蓝 */
   --primary-foreground: #ffffff;
   --default: #1a2942;
   --default-foreground: #ffffff;
@@ -39,22 +39,22 @@
   /* ---------- Form ---------- */
   --border: #e5dfd1;
   --input: #f5f1e8;
-  --ring: #0e7fbf;
+  --ring: #3b82f6;
   --button-bg-disabled: #e5dfd1;
 
   /* ---------- Sidebar ---------- */
   --sidebar: #fbf6ec;
-  --sidebar-primary: #0e7fbf;
+  --sidebar-primary: #3b82f6;
   --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: #fff3e0;
   --sidebar-accent-foreground: #8a4a18;
   --sidebar-border: #ece4d2;
-  --sidebar-ring: #0e7fbf;
+  --sidebar-ring: #3b82f6;
   --sidebar-button-hover: #f3ecdc;
   --sidebar-weak: #b8a988;
 
   /* ---------- Chart ---------- */
-  --chart-1: #0e7fbf; /* 海蓝 */
+  --chart-1: #3b82f6; /* 天空蓝 */
   --chart-2: #f59e0b; /* 落日橙 */
   --chart-3: #d4a574; /* 沙金 */
   --chart-4: #2d8659; /* 椰绿 */

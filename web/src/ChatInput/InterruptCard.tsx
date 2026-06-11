@@ -10,7 +10,7 @@ export function InterruptCard({ interrupt }: { interrupt: InterruptInfo }) {
   if (!interrupt.options || interrupt.options.length === 0) return null;
 
   return (
-    <div className="flex flex-wrap gap-2 mt-2.5">
+    <div className="flex flex-wrap gap-2.5 mt-3.5">
       {interrupt.options.map((opt, idx) => (
         <Chip
           key={idx}

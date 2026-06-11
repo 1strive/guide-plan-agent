@@ -97,7 +97,7 @@ export function Sidebar() {
           + 新会话
         </Button>
       </div>
-      <ul className="flex-1 overflow-y-auto px-3 py-3 list-none">
+      <ul className="flex-1 overflow-y-auto px-3 py-4 list-none space-y-1.5">
         {sessions.length === 0 && (
           <li className="text-center text-[13px] text-[var(--sidebar-weak)] py-8">
             暂无会话
@@ -105,11 +105,12 @@ export function Sidebar() {
         )}
         {sessions.map((s) => {
           const active = s.id === activeId;
+          const displayTitle = s.title || s.id.slice(0, 8) + "…";
           return (
             <li
               key={s.id}
               className={
-                "group relative px-3.5 py-3 mb-1.5 rounded-md cursor-pointer transition-colors duration-150 ease-in-out " +
+                "group relative px-4 py-4 rounded-lg cursor-pointer transition-colors duration-150 ease-in-out " +
                 (active
                   ? "bg-sidebar-accent"
                   : "hover:bg-[var(--sidebar-button-hover)]")
@@ -118,15 +119,16 @@ export function Sidebar() {
             >
               <span
                 className={
-                  "block text-sm truncate pr-6 " +
+                  "block text-[14px] leading-5 truncate pr-7 " +
                   (active
                     ? "text-sidebar-accent-foreground font-medium"
                     : "text-foreground")
                 }
+                title={displayTitle}
               >
-                {s.title || s.id.slice(0, 8) + "…"}
+                {displayTitle}
               </span>
-              <span className="flex items-center justify-between mt-2">
+              <span className="flex items-center justify-between mt-3">
                 {s.totalTokens > 0 ? (
                   <Tag tone="primary" size="xs">
                     {s.totalTokens.toLocaleString()} tokens
@@ -139,7 +141,7 @@ export function Sidebar() {
                 </span>
               </span>
               <button
-                className="absolute top-2 right-2 w-6 h-6 inline-flex items-center justify-center rounded-md text-icon-weak opacity-0 group-hover:opacity-100 transition-all duration-150 ease-in-out hover:bg-destructive hover:text-destructive-foreground cursor-pointer leading-none"
+                className="absolute top-3 right-2.5 w-6 h-6 inline-flex items-center justify-center rounded-md text-icon-weak opacity-0 group-hover:opacity-100 transition-all duration-150 ease-in-out hover:bg-destructive hover:text-destructive-foreground cursor-pointer leading-none"
                 onClick={(e) => handleDeleteSession(s.id, e)}
                 title="删除会话"
                 aria-label="删除会话"

@@ -23,7 +23,7 @@ export function MessageList() {
     );
 
   return (
-    <div className="flex-1 overflow-y-auto rounded-xl border border-border bg-card shadow-card px-6 py-5 space-y-3">
+    <div className="flex-1 overflow-y-auto rounded-xl border border-border bg-card shadow-card px-7 py-6 space-y-5">
       {messages.length === 0 && (
         <div className="text-center text-icon-weak text-sm pt-[40%]">
           {activeId ? "输入消息开始聊天" : "点击左侧「+ 新会话」开始"}
@@ -33,7 +33,7 @@ export function MessageList() {
         <MessageBubble key={i} msg={msg} />
       ))}
       {showLoading && (
-        <div className="max-w-[80%] mr-auto px-4 py-3 rounded-lg rounded-bl-sm bg-card border border-border text-muted-foreground italic text-sm leading-relaxed">
+        <div className="max-w-[80%] mr-auto px-5 py-3.5 rounded-lg rounded-bl-sm bg-card border border-border text-muted-foreground italic text-sm leading-relaxed">
           思考中…
         </div>
       )}

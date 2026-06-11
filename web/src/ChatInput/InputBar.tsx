@@ -34,7 +34,7 @@ export function InputBar() {
   }
 
   return (
-    <div className="flex gap-3 items-stretch">
+    <div className="flex gap-3 items-stretch pt-1">
       <input
         value={input}
         onChange={(e) => setInput(e.target.value)}
@@ -47,19 +47,19 @@ export function InputBar() {
               : "请先创建会话"
         }
         disabled={!activeId || sending}
-        className="flex-1 h-12 px-4 rounded-md text-sm bg-input text-foreground placeholder:text-muted-foreground border border-border outline-none transition-colors duration-150 ease-in-out focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:opacity-60 disabled:cursor-not-allowed"
+        className="flex-1 h-14 px-5 rounded-lg text-sm bg-input text-foreground placeholder:text-muted-foreground border border-border outline-none transition-colors duration-150 ease-in-out focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:opacity-60 disabled:cursor-not-allowed"
       />
       {sending && currentRunId && (
         <Button
           variant="ghost"
-          size="lg"
+          size="xl"
           onClick={handleStop}
           title="主动停止当前 Run"
         >
           停止
         </Button>
       )}
-      <Button size="lg" onClick={onSendClick} disabled={!activeId || sending}>
+      <Button size="xl" onClick={onSendClick} disabled={!activeId || sending}>
         发送
       </Button>
     </div>

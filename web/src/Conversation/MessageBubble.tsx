@@ -11,7 +11,7 @@ import { InterruptCard } from "../ChatInput/InterruptCard";
  * - interrupt 营营负背景 + accent 描边，顶部带徽章
  */
 const BASE =
-  "max-w-[80%] px-4 py-3 rounded-lg text-sm leading-relaxed whitespace-pre-wrap break-words";
+  "max-w-[80%] px-5 py-4 rounded-lg text-sm leading-relaxed whitespace-pre-wrap break-words";
 
 const USER_CLS = "bg-primary text-primary-foreground ml-auto rounded-br-sm";
 const AI_CLS =
@@ -37,7 +37,7 @@ export function MessageBubble({ msg }: { msg: ChatMsg }) {
       <TextContent content={msg.content} />
       {msg.interrupt && <InterruptCard interrupt={msg.interrupt} />}
       {msg.toolCalls && msg.toolCalls.length > 0 && (
-        <div className="flex flex-wrap gap-2 mt-3">
+        <div className="flex flex-wrap gap-2 mt-3.5">
           {msg.toolCalls.map((tc, j) => (
             <ToolCallChip key={j} toolCall={tc} />
           ))}
