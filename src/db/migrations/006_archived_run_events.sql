@@ -19,13 +19,12 @@
 -- - 旧 agent_run_events 表保留(停止写入),旧数据保留以便回溯,后续 Task 决定是否清理
 
 CREATE TABLE IF NOT EXISTS archived_run_events (
-  run_id CHAR(36) NOT NULL,
-  -- 沿用 RunHandle.seqCounter 应用层自增;Redis Stream ID 也用 {seq}-0 显式形式写入
-  seq INT UNSIGNED NOT NULL,
-  -- 事件全量 JSON(AG-UI 协议序列化结果),回放时直接 emit
-  event_json JSON NOT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (run_id, seq),
-  CONSTRAINT fk_archived_run_events_run FOREIGN KEY (run_id)
-    REFERENCES agent_runs (run_id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    run_id CHAR(36) NOT NULL,
+    -- 沿用 RunHandle.seqCounter 应用层自增;Redis Stream ID 也用 {seq}-0 显式形式写入
+    seq INT UNSIGNED NOT NULL,
+    -- 事件全量 JSON(AG-UI 协议序列化结果),回放时直接 emit
+    event_json JSON NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (run_id, seq),
+    CONSTRAINT fk_archived_run_events_run FOREIGN KEY (run_id) REFERENCES agent_runs (run_id) ON DELETE CASCADE
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;

@@ -26,23 +26,23 @@
 
 ### 2.1 新增文件
 
-| 文件 | 内容 |
-|------|------|
-| `src/redis/pool.ts` | ioredis 单例 + `createRedis(url)` / `closeRedis()` |
-| `src/redis/runEventStore.ts` | 5 个核心函数;`STREAM_KEY = 'run:{runId}:events'` / `CHANNEL_KEY = 'run:{runId}:channel'` / `STREAM_FIELD = 'e'` |
-| `src/db/migrations/006_archived_run_events.sql` | 冷库表;FK CASCADE 到 `agent_runs(run_id)` |
+| 文件                                            | 内容                                                                                                            |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `src/redis/pool.ts`                             | ioredis 单例 + `createRedis(url)` / `closeRedis()`                                                              |
+| `src/redis/runEventStore.ts`                    | 5 个核心函数;`STREAM_KEY = 'run:{runId}:events'` / `CHANNEL_KEY = 'run:{runId}:channel'` / `STREAM_FIELD = 'e'` |
+| `src/db/migrations/006_archived_run_events.sql` | 冷库表;FK CASCADE 到 `agent_runs(run_id)`                                                                       |
 
 ### 2.2 修改文件
 
-| 文件 | 变更点 |
-|------|--------|
-| `docker-compose.yml` | 加 `redis:7-alpine` 服务,port `6380:6379`,AOF everysec,volume `guide_redis` |
-| `package.json` | `ioredis ^5.4.1` |
-| `src/config.ts` | `REDIS_URL` / `REDIS_EVENT_TTL_SEC`(默认 3600s) |
-| `.env.example` | 同上两项 |
-| `src/db/runRepo.ts` | **删** `appendEvent` / `queryEventsAfter`;**加** `bulkInsertArchivedEvents` / `queryArchivedEventsAfter` / `updateRunLastEventSeq` |
+| 文件                      | 变更点                                                                                                                                                          |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `docker-compose.yml`      | 加 `redis:7-alpine` 服务,port `6380:6379`,AOF everysec,volume `guide_redis`                                                                                     |
+| `package.json`            | `ioredis ^5.4.1`                                                                                                                                                |
+| `src/config.ts`           | `REDIS_URL` / `REDIS_EVENT_TTL_SEC`(默认 3600s)                                                                                                                 |
+| `.env.example`            | 同上两项                                                                                                                                                        |
+| `src/db/runRepo.ts`       | **删** `appendEvent` / `queryEventsAfter`;**加** `bulkInsertArchivedEvents` / `queryArchivedEventsAfter` / `updateRunLastEventSeq`                              |
 | `src/agent/runManager.ts` | 构造函数加 `redis: RedisClient` 参数;`handleEvent` 改 `redisAppendEvent`;`subscribe` 双源读取;`finalize` 调 `archiveAndCleanup`;`cleanupOnStartup` 加 SCAN 兜底 |
-| `src/index.ts` | `createRedis(config.REDIS_URL)` + 注入 `RunManager`;SIGTERM 链路加 `closeRedis()`;`/health` 并入 PING |
+| `src/index.ts`            | `createRedis(config.REDIS_URL)` + 注入 `RunManager`;SIGTERM 链路加 `closeRedis()`;`/health` 并入 PING                                                           |
 
 ---
 
@@ -65,9 +65,9 @@
 ```ts
 // runManager.subscribe
 if (await streamExists(redis, runId)) {
-  events = await redisQueryEventsAfter(redis, runId, afterSeq)
+  events = await redisQueryEventsAfter(redis, runId, afterSeq);
 } else {
-  events = await queryArchivedEventsAfter(pool, runId, afterSeq)
+  events = await queryArchivedEventsAfter(pool, runId, afterSeq);
 }
 ```
 

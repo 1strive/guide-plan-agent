@@ -84,43 +84,43 @@
 
 ### 1.2 模块职责表
 
-| 模块 | 文件 | 职责 | 不该做什么 |
-|------|------|------|----------|
-| HTTP 层 | `src/index.ts` | 路由、SSE 生命周期、abort 钩子、日志 trace_id、token 持久化 | 不写 LLM 调用细节、不解析 SSE 协议 |
-| Prompts | `src/agent/prompts/` | section 化模板、版本注册、渲染插值、Few-shot prepend | 不知道 LLM 怎么调、不接 DB |
-| **Run 管理器**(Task 整合-2 + Task 5.4) | `src/agent/runManager.ts` | 进程内 Run 注册表 + 三态 abort(per-subscriber vs per-run)+ 状态机推进 + 事件 pump(**Task 5.4:写 Redis Stream 替代 agent_run_events,终态调 archiveAndCleanup 归档冷库;启动扫 Redis 残留 stream 兜底归档**)、广播 subscriber、增量写 chat_messages) | 不直接接 HTTP / LangGraph;只通过 langgraph-agent 拿事件流 |
-| **Redis 热层**(Task 5.4) | `src/redis/pool.ts` / `src/redis/runEventStore.ts` | ioredis 单例 + 事件流封装(`appendEvent` XADD `{seq}-0` + PUBLISH;`queryEventsAfter` XRANGE 续订;`streamExists` 双源判断;`archiveAndCleanup` XRANGE 全段→批量 INSERT IGNORE archived_run_events→EXPIRE TTL;`listOrphanRuns` SCAN 兜底)。XADD 显式 seq ID 让 Redis 拒乱序写,等价 MySQL PRIMARY KEY 保护 | 不知道业务语义;不写 chat_messages / agent_runs 状态机 |
-| **Agent 主线**(Task 整合-1) | `src/agent/langgraph-agent.ts` | `runLangGraphAgent`:`langchain.createAgent` + `MemorySaver` + 工具 wrap;**被 runManager 调用**;`buildChatModel` 导出供 planner 复用 | 不写 DB、不直接接 HTTP |
-| **Plan-and-Execute Agent**(Task 4.2) | `src/agent/planner.ts` | `runPlannerAgent`:跟 `runLangGraphAgent` 同签名;三阶段(PLAN LLM → 顺序 runTool → SYNTH LLM);Plan JSON 走 zod 严格校验 + 重试 1 次;**复用 thinkSplit** 处理 `<think>`;runManager 按 mode dispatch | 不写 DB、不直接接 HTTP;不支持步骤间参数引用(简化版) |
-| **Agent 事件 Adapter** | `src/agent/langgraphToAgUi.ts` | 把 LangGraph `streamEvents v2` 翻译成项目原生 AG-UI 事件;[ASK_USER] 检测;sources 聚合到 RUN_FINISHED;**Task 4.1.A think 标签拆分**(`<think>...</think>` 走 THINKING 事件,跟 TEXT 平行);**Task 4.1.B 工具调用 timing 日志** | 不知道工具细节、不写库 |
-| **Run 仓库** | `src/db/runRepo.ts` | `agent_runs`(完整状态机)CRUD + `markAllRunningAsFailed`(启动清理) + **Task 5.4:`archived_run_events` 冷库读写 (`bulkInsertArchivedEvents` / `queryArchivedEventsAfter` / `updateRunLastEventSeq` 归档时一次性同步 last_event_seq);`appendEvent` / `queryEventsAfter` 已删除,迁至 Redis** | 不发事件、不调 LangGraph |
-| Agent 共用类型 | `src/agent/llm.ts` | 只导出 `ChatMessage` / `ResumeItem` / `TokenUsage` 类型;**整合-1 后手写实现全部删除** | 不含任何业务逻辑 |
-| Tools | `src/agent/tools.ts` | function calling 定义、工具实现(`search_destinations` / `get_destination_detail` / **`web_search`** Task 4.0)、参数 zod 校验、间接注入防御 | 不发 SSE 事件、不调 LLM |
-| Web 搜索缓存 | `src/agent/webSearchCache.ts` | Tavily 调用结果 SHA-256(query+depth) → MySQL `web_search_cache` 表,TTL 默认 24h(`WEB_SEARCH_CACHE_TTL_SECONDS`),避免烧 Tavily 免费额度 | 不调 Tavily、不知道工具语义 |
-| AG-UI 协议 | `src/agent/ag-ui.ts` | 事件类型枚举 + 构造器(RUN_STARTED / TEXT_MESSAGE_* / TOOL_CALL_* / **THINKING_*** Task 4.1 / **PLAN_GENERATED** Task 4.2 / RUN_FINISHED);**`Source` 是 discriminated union `DestinationSource \| UrlSource`**(Task 4.0) | 不含业务逻辑 |
-| **think 切分(Task 4.1)** | `src/agent/thinkSplit.ts` | 纯函数 + 显式 state 的跨 chunk `<think>...</think>` 切分;adapter 把 think 段当 THINKING_CONTENT 事件,把外部段当 TEXT_MESSAGE_CONTENT | 不发事件、不知 AG-UI;单测覆盖 11 个边界 |
-| Sanitize 安全 | `src/agent/sanitize.ts` | `detectInjection` 入口注入检测 / `wrapUntrusted` 边界标记 / `detectSystemLeak` 出口泄露检测(纯函数) | 不发日志、不修改输入,只返回判定结果 |
-| Token Usage | `src/agent/token-usage.ts` | `estimateTokens` 兜底估算、`accumulateUsage` 累加 | 不写 DB |
-| Chat 持久化 | `src/db/chatRepo.ts` | chat_sessions / chat_messages 的 CRUD | 不知道 LLM、不调工具 |
-| Destination 数据 | `src/db/destinationRepo.ts` | destinations / destination_features 的查询 | 不写 chat 表 |
-| Config | `src/config.ts` | 环境变量 zod schema + 加载 | 不依赖业务模块 |
-| Eval | `src/eval/`、`scripts/eval-prompt.ts` | Prompt 评测器 + 测试集 + 批量脚本(Task 2.3) | 不污染生产 chat 表 |
+| 模块                                   | 文件                                               | 职责                                                                                                                                                                                                                                                                                                  | 不该做什么                                                |
+| -------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| HTTP 层                                | `src/index.ts`                                     | 路由、SSE 生命周期、abort 钩子、日志 trace_id、token 持久化                                                                                                                                                                                                                                           | 不写 LLM 调用细节、不解析 SSE 协议                        |
+| Prompts                                | `src/agent/prompts/`                               | section 化模板、版本注册、渲染插值、Few-shot prepend                                                                                                                                                                                                                                                  | 不知道 LLM 怎么调、不接 DB                                |
+| **Run 管理器**(Task 整合-2 + Task 5.4) | `src/agent/runManager.ts`                          | 进程内 Run 注册表 + 三态 abort(per-subscriber vs per-run)+ 状态机推进 + 事件 pump(**Task 5.4:写 Redis Stream 替代 agent_run_events,终态调 archiveAndCleanup 归档冷库;启动扫 Redis 残留 stream 兜底归档**)、广播 subscriber、增量写 chat_messages)                                                     | 不直接接 HTTP / LangGraph;只通过 langgraph-agent 拿事件流 |
+| **Redis 热层**(Task 5.4)               | `src/redis/pool.ts` / `src/redis/runEventStore.ts` | ioredis 单例 + 事件流封装(`appendEvent` XADD `{seq}-0` + PUBLISH;`queryEventsAfter` XRANGE 续订;`streamExists` 双源判断;`archiveAndCleanup` XRANGE 全段→批量 INSERT IGNORE archived_run_events→EXPIRE TTL;`listOrphanRuns` SCAN 兜底)。XADD 显式 seq ID 让 Redis 拒乱序写,等价 MySQL PRIMARY KEY 保护 | 不知道业务语义;不写 chat_messages / agent_runs 状态机     |
+| **Agent 主线**(Task 整合-1)            | `src/agent/langgraph-agent.ts`                     | `runLangGraphAgent`:`langchain.createAgent` + `MemorySaver` + 工具 wrap;**被 runManager 调用**;`buildChatModel` 导出供 planner 复用                                                                                                                                                                   | 不写 DB、不直接接 HTTP                                    |
+| **Plan-and-Execute Agent**(Task 4.2)   | `src/agent/planner.ts`                             | `runPlannerAgent`:跟 `runLangGraphAgent` 同签名;三阶段(PLAN LLM → 顺序 runTool → SYNTH LLM);Plan JSON 走 zod 严格校验 + 重试 1 次;**复用 thinkSplit** 处理 `<think>`;runManager 按 mode dispatch                                                                                                      | 不写 DB、不直接接 HTTP;不支持步骤间参数引用(简化版)       |
+| **Agent 事件 Adapter**                 | `src/agent/langgraphToAgUi.ts`                     | 把 LangGraph `streamEvents v2` 翻译成项目原生 AG-UI 事件;[ASK_USER] 检测;sources 聚合到 RUN_FINISHED;**Task 4.1.A think 标签拆分**(`<think>...</think>` 走 THINKING 事件,跟 TEXT 平行);**Task 4.1.B 工具调用 timing 日志**                                                                            | 不知道工具细节、不写库                                    |
+| **Run 仓库**                           | `src/db/runRepo.ts`                                | `agent_runs`(完整状态机)CRUD + `markAllRunningAsFailed`(启动清理) + **Task 5.4:`archived_run_events` 冷库读写 (`bulkInsertArchivedEvents` / `queryArchivedEventsAfter` / `updateRunLastEventSeq` 归档时一次性同步 last_event_seq);`appendEvent` / `queryEventsAfter` 已删除,迁至 Redis**              | 不发事件、不调 LangGraph                                  |
+| Agent 共用类型                         | `src/agent/llm.ts`                                 | 只导出 `ChatMessage` / `ResumeItem` / `TokenUsage` 类型;**整合-1 后手写实现全部删除**                                                                                                                                                                                                                 | 不含任何业务逻辑                                          |
+| Tools                                  | `src/agent/tools.ts`                               | function calling 定义、工具实现(`search_destinations` / `get_destination_detail` / **`web_search`** Task 4.0)、参数 zod 校验、间接注入防御                                                                                                                                                            | 不发 SSE 事件、不调 LLM                                   |
+| Web 搜索缓存                           | `src/agent/webSearchCache.ts`                      | Tavily 调用结果 SHA-256(query+depth) → MySQL `web_search_cache` 表,TTL 默认 24h(`WEB_SEARCH_CACHE_TTL_SECONDS`),避免烧 Tavily 免费额度                                                                                                                                                                | 不调 Tavily、不知道工具语义                               |
+| AG-UI 协议                             | `src/agent/ag-ui.ts`                               | 事件类型枚举 + 构造器(RUN*STARTED / TEXT_MESSAGE*_ / TOOL*CALL*_ / **THINKING\_\*** Task 4.1 / **PLAN_GENERATED** Task 4.2 / RUN_FINISHED);**`Source` 是 discriminated union `DestinationSource \| UrlSource`**(Task 4.0)                                                                             | 不含业务逻辑                                              |
+| **think 切分(Task 4.1)**               | `src/agent/thinkSplit.ts`                          | 纯函数 + 显式 state 的跨 chunk `<think>...</think>` 切分;adapter 把 think 段当 THINKING_CONTENT 事件,把外部段当 TEXT_MESSAGE_CONTENT                                                                                                                                                                  | 不发事件、不知 AG-UI;单测覆盖 11 个边界                   |
+| Sanitize 安全                          | `src/agent/sanitize.ts`                            | `detectInjection` 入口注入检测 / `wrapUntrusted` 边界标记 / `detectSystemLeak` 出口泄露检测(纯函数)                                                                                                                                                                                                   | 不发日志、不修改输入,只返回判定结果                       |
+| Token Usage                            | `src/agent/token-usage.ts`                         | `estimateTokens` 兜底估算、`accumulateUsage` 累加                                                                                                                                                                                                                                                     | 不写 DB                                                   |
+| Chat 持久化                            | `src/db/chatRepo.ts`                               | chat_sessions / chat_messages 的 CRUD                                                                                                                                                                                                                                                                 | 不知道 LLM、不调工具                                      |
+| Destination 数据                       | `src/db/destinationRepo.ts`                        | destinations / destination_features 的查询                                                                                                                                                                                                                                                            | 不写 chat 表                                              |
+| Config                                 | `src/config.ts`                                    | 环境变量 zod schema + 加载                                                                                                                                                                                                                                                                            | 不依赖业务模块                                            |
+| Eval                                   | `src/eval/`、`scripts/eval-prompt.ts`              | Prompt 评测器 + 测试集 + 批量脚本(Task 2.3)                                                                                                                                                                                                                                                           | 不污染生产 chat 表                                        |
 
 ---
 
 ## 2. HTTP API 一览
 
-| Method | Path | 请求体 / 参数 | 响应 | 代码位置 |
-|--------|------|-------------|------|---------|
-| GET | `/health` | — | `{ ok, db }`,503 表示 DB 挂 | `src/index.ts:40-48` |
-| GET | `/sessions` | — | `{ sessions: SessionRow[] }` | `src/index.ts:50-53` |
-| POST | `/sessions` | — | `201 { sessionId }` | `src/index.ts:68-73` |
-| GET | `/sessions/:id/messages` | `id` | `{ messages, status }`(整合-2 加 `status: 'running'\|'end'`),404 表示不存在 | `src/index.ts` GET `/messages` |
-| DELETE | `/sessions/:id` | `id` | `204 null`;整合-2 后会先 cancel 活跃 Run | `src/index.ts` DELETE `/sessions/:id` |
-| POST | `/sessions/:id/stream` | `{ message, promptVersion? }` | SSE 流;**整合-2 重构**:启动 Run + subscribe,客户端断开仅 unsubscribe(Run 在 runManager 内继续) | `src/index.ts` POST `/stream` |
-| **GET** | **`/sessions/:id/runs/active`** ★ | `id` | `{ active: AgentRunRow \| null }`,前端打开会话时调用以决定续订 | 整合-2 新增 |
-| **GET** | **`/sessions/:id/runs/:runId/stream?after_seq=N`** ★ | `id`, `runId`, `after_seq` | SSE:先回放 `seq > N` 的历史事件,Run 仍活跃时接实时流 | 整合-2 新增(续订接口) |
-| **POST** | **`/sessions/:id/runs/:runId/cancel`** ★ | `id`, `runId` | `202 { cancelled }` 主动取消,幂等 | 整合-2 新增 |
+| Method   | Path                                                 | 请求体 / 参数                 | 响应                                                                                           | 代码位置                              |
+| -------- | ---------------------------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------- |
+| GET      | `/health`                                            | —                             | `{ ok, db }`,503 表示 DB 挂                                                                    | `src/index.ts:40-48`                  |
+| GET      | `/sessions`                                          | —                             | `{ sessions: SessionRow[] }`                                                                   | `src/index.ts:50-53`                  |
+| POST     | `/sessions`                                          | —                             | `201 { sessionId }`                                                                            | `src/index.ts:68-73`                  |
+| GET      | `/sessions/:id/messages`                             | `id`                          | `{ messages, status }`(整合-2 加 `status: 'running'\|'end'`),404 表示不存在                    | `src/index.ts` GET `/messages`        |
+| DELETE   | `/sessions/:id`                                      | `id`                          | `204 null`;整合-2 后会先 cancel 活跃 Run                                                       | `src/index.ts` DELETE `/sessions/:id` |
+| POST     | `/sessions/:id/stream`                               | `{ message, promptVersion? }` | SSE 流;**整合-2 重构**:启动 Run + subscribe,客户端断开仅 unsubscribe(Run 在 runManager 内继续) | `src/index.ts` POST `/stream`         |
+| **GET**  | **`/sessions/:id/runs/active`** ★                    | `id`                          | `{ active: AgentRunRow \| null }`,前端打开会话时调用以决定续订                                 | 整合-2 新增                           |
+| **GET**  | **`/sessions/:id/runs/:runId/stream?after_seq=N`** ★ | `id`, `runId`, `after_seq`    | SSE:先回放 `seq > N` 的历史事件,Run 仍活跃时接实时流                                           | 整合-2 新增(续订接口)                 |
+| **POST** | **`/sessions/:id/runs/:runId/cancel`** ★             | `id`, `runId`                 | `202 { cancelled }` 主动取消,幂等                                                              | 整合-2 新增                           |
 
 ---
 
@@ -278,6 +278,7 @@ yield RUN_FINISHED { outcome: success, usage: totalUsage }
 ```
 
 **关键不变量**:
+
 - 工具调用结果必须以 `role:tool` + `tool_call_id` 形式追加到 msgs,LLM 下一轮才能"看见"
 - `[ASK_USER]` 协议是当前的"反问"实现(临时方案,见 §5.4)
 - usage 必须显式声明 `stream_options.include_usage`,否则流式不返回 usage(`postChatStream` 已处理)
@@ -311,6 +312,7 @@ client                handler              llm/tools
 最简单的 CRUD:`getSessionMessages` 按 `created_at ASC` 全量返回该会话的 user/assistant/system 三种角色消息(`src/db/chatRepo.ts:56-65`)。
 
 **当前没有的字段**(阶段4 Task 4.5 会加):
+
 - `status: 'running' | 'end'`(标识 Run 是否还在跑)
 - `lastMessage` 用于断点续传
 
@@ -337,11 +339,11 @@ client                handler                DB
 
 当前 Agent 注册的工具按 `v1_base.toolUsageRules` 各管一类场景:
 
-| 用户问题 | 模型选择 | 工具类型 | 延迟 |
-|---------|---------|---------|------|
-| "云南有什么目的地" | `search_destinations`(SQL LIKE) | MySQL | ~10ms |
-| "列举丽江的美食" | `get_destination_detail`(SQL by id) | MySQL | ~10ms |
-| "北京 2026 春节有什么活动" / "上海今天天气" | `web_search`(Tavily, Task 4.0) | 联网 | ~1-3s(缓存命中 ~10ms) |
+| 用户问题                                    | 模型选择                            | 工具类型 | 延迟                  |
+| ------------------------------------------- | ----------------------------------- | -------- | --------------------- |
+| "云南有什么目的地"                          | `search_destinations`(SQL LIKE)     | MySQL    | ~10ms                 |
+| "列举丽江的美食"                            | `get_destination_detail`(SQL by id) | MySQL    | ~10ms                 |
+| "北京 2026 春节有什么活动" / "上海今天天气" | `web_search`(Tavily, Task 4.0)      | 联网     | ~1-3s(缓存命中 ~10ms) |
 
 **演进路径**:Task 4.4 完成后,SQL 工具会被高德地图 / 携程等 MCP source 替代(动态 RAG);若覆盖充分,SQL 工具 + MySQL seed → MCP 整体取代,详见决策 #6。
 
@@ -379,6 +381,7 @@ index N+1~  │ history          │ listRecentMessages(最近 30 条,正序)
 事件类型定义在 `src/agent/ag-ui.ts:6-22`。一次成功对话的事件时序:
 
 **ReAct 模式**(默认,mode='react'):
+
 ```
 RUN_STARTED
   → STEP_STARTED(generating)
@@ -404,6 +407,7 @@ RUN_FINISHED { outcome, usage }
 ```
 
 **Plan-and-Execute 模式**(Task 4.2,mode='plan'):
+
 ```
 RUN_STARTED
   → STEP_STARTED(planning)
@@ -431,6 +435,7 @@ RUN_FINISHED { outcome, usage }
 差异关键点:plan 模式比 react 多一对 `STEP_STARTED('planning')` + `PLAN_GENERATED` 事件;tool 部分事件序列完全一致;最后多一对 `STEP_STARTED('synthesis')`。前端 `App.tsx:consumeStream` switch 无 default,新增 `PLAN_GENERATED` / step('planning'|'synthesis') 不破坏(fall through 静默)。
 
 **Task 4.1.B/C + 4.2.C 配套日志**(`logs/app.log`,所有行自带 `runId` + `mode` child binding):
+
 - `'run started' { sessionId, runId, mode }`
 - `'plan generated' { stepsCount, retries }`(Task 4.2,仅 plan 模式)
 - `'tool finished' { tool, toolCallId, durationMs, argsPreview, resultPreview, mode? }` × N
@@ -523,14 +528,14 @@ langgraphToAgUi.ts on_tool_end:
 
 #### 关键路径要素
 
-| 要素 | 出处 | 说明 |
-|------|------|------|
-| **缓存 TTL 在应用层** | `webSearchCache.ts:getCached` 用 `TIMESTAMPDIFF` 判 age | DB 不主动清,下次写入 `ON DUPLICATE KEY UPDATE` 覆盖 |
-| **lazy import @tavily/core** | `tools.ts:runWebSearch` | 无 key 时不引包,减少冷启动 |
-| **snippet 走 detectInjection** | 网页是高危源 | 阶段2 §5.6 留的"间接注入"伏笔正式生效 |
-| **Source 是 discriminated union** | `ag-ui.ts:DestinationSource \| UrlSource` | 前端按 `type` 渲染不同 UI |
-| **sourceKey 跨类型去重** | `langgraph-agent.ts:sourceKey()` | `dest-${id}` / `url-${url}` |
-| **AG-UI RunFinishedEvent.sources** | `ag-ui.ts:RunFinishedEvent` | 前后端契约 |
+| 要素                               | 出处                                                    | 说明                                                |
+| ---------------------------------- | ------------------------------------------------------- | --------------------------------------------------- |
+| **缓存 TTL 在应用层**              | `webSearchCache.ts:getCached` 用 `TIMESTAMPDIFF` 判 age | DB 不主动清,下次写入 `ON DUPLICATE KEY UPDATE` 覆盖 |
+| **lazy import @tavily/core**       | `tools.ts:runWebSearch`                                 | 无 key 时不引包,减少冷启动                          |
+| **snippet 走 detectInjection**     | 网页是高危源                                            | 阶段2 §5.6 留的"间接注入"伏笔正式生效               |
+| **Source 是 discriminated union**  | `ag-ui.ts:DestinationSource \| UrlSource`               | 前端按 `type` 渲染不同 UI                           |
+| **sourceKey 跨类型去重**           | `langgraph-agent.ts:sourceKey()`                        | `dest-${id}` / `url-${url}`                         |
+| **AG-UI RunFinishedEvent.sources** | `ag-ui.ts:RunFinishedEvent`                             | 前后端契约                                          |
 
 > **历史说明**:本节原为 §4.4 RAG 数据流(MySQL → Chroma → tool result → sources),2026-06-01 RAG 废弃后整节重写为 web_search 数据流。
 
@@ -571,10 +576,11 @@ OpenAI 兼容协议默认**流式响应不返回 usage**。不声明就拿不到
 `detectInjection` 命中后,handler 只做两件事:① 记日志告警;② 把消息用 `<untrusted_user_content>` 包裹后**继续走 LLM**。**不直接 return 403**。
 
 理由:
+
 1. **规则匹配有误杀**:用户真说"我想去看 system update 风格的建筑设计"会命中 `pseudo_section_delimiter` 规则——直接拒绝会让正常用户莫名其妙
 2. **双层防御更鲁棒**:`securityRules` 已经训练模型识别注入并自己拒绝,sanitize 只是"加一层提醒",让模型在更明确的边界下做最终判断
 3. **可观测优先**:阶段当前是项目早期,先把"注入流量分布"通过 `prompt injection detected` 告警收集起来,后期决定是否升级为硬拦截
-4. **实测验证**:`docs/02-实验记录/exp-02-prompt-versions-2026-05-30T10-37-46-151Z.json` 的 5 条 inj-* case 全部通过,说明双层防御足够
+4. **实测验证**:`docs/02-实验记录/exp-02-prompt-versions-2026-05-30T10-37-46-151Z.json` 的 5 条 inj-\* case 全部通过,说明双层防御足够
 
 **未来升级方向**:严重等级 = `high` 且来自非可信用户(阶段5 加身份层后)时硬拒绝,low/medium 仍走"包裹 + 让模型判"路径。
 
@@ -583,10 +589,12 @@ OpenAI 兼容协议默认**流式响应不返回 usage**。不声明就拿不到
 LangGraph 的 `MemorySaver` / `SqliteSaver` 是**框架自身的 thread 状态持久化**——给"interrupt + Command(resume)"用的,让 LangGraph 自己知道上次跑到哪。
 
 我们的"前端切走再回来续订"需求是**另一回事**:
+
 - 前端要从某个事件 seq 开始重新拿到 AG-UI 事件流(渲染聊天 UI)
 - LangGraph thread state 跟 AG-UI 事件流是两套数据(前者是消息历史 + 工具调用记录,后者是 SSE 帧)
 
 所以做了职责分离:
+
 - **LangGraph Checkpointer**(进程内 `MemorySaver`)管 LangGraph 自己的 thread state
 - **`agent_run_events` 表**存我们项目业务的 AG-UI 事件流,seq 单调递增,**前端续订的 `?after_seq=N` 直接 SQL 查**
 - **`runManager` 在内存中持有 RunHandle**,绑定 LangGraph stream + 订阅者集合 + per-run AbortController;客户端断开仅 unsubscribe,Run 在 manager 内继续跑
@@ -594,11 +602,13 @@ LangGraph 的 `MemorySaver` / `SqliteSaver` 是**框架自身的 thread 状态�
 **为什么 Checkpointer 不升级到 SqliteSaver**:进程重启后 LangGraph 自己能恢复 thread state 没问题,但"重新挂上 stream + 重建 subscriber + 重新 pump"这套需要重写大量代码,**收益不匹配学习项目复杂度**——所以选简单方案:重启时把 running 全标 failed,前端续订拿到 active=null 显示"已中断"。
 
 **三态 abort 模型**:
+
 - **Per-subscriber AbortController**:HTTP handler 持有,`req.raw 'close'` 触发 → 只调 `unsubscribe`,**不通知 RunManager**
 - **Per-run AbortController**:RunManager 持有,只在 ① `POST /runs/:runId/cancel`、② SIGTERM(目前没接,Task 5.4 接)、③ 5 分钟超时(目前没设,后续可加)三种情况触发 → 才真正 abort LangGraph stream
 - **两个 Controller 无级联** —— 这是跟 Chat App 阶段(整合-1 之前)最关键的差异
 
 实测验证(e2e smoke):
+
 - 切走后查 /runs/active → status='running',lastEventSeq=283 持续涨 ✅
 - 主动 cancel → HTTP 202 + active=null + status='end' ✅
 - 续订 GET /runs/:runId/stream?after_seq=0 → 完整回放 RUN_STARTED + 后续事件 ✅
@@ -608,6 +618,7 @@ LangGraph 的 `MemorySaver` / `SqliteSaver` 是**框架自身的 thread 状态�
 整合阶段做的决策:阶段3 完成后,真实使用反馈出"会话续流"需求(切走 Run 不停、回来续订),手写实现成本约 Task 4.5 完整复杂度;而 LangGraph 的 `thread_id` + `Checkpointer` 是现成的,**接框架的成本远低于手写**——所以决定整合-1 把主 Agent 切到 LangGraph,整合-2 借 Checkpointer 做轻量续流。
 
 具体落地选择:
+
 - 用 `langchain.createAgent`(LangChain 1.x 推荐 API,旧 `@langchain/langgraph/prebuilt:createReactAgent` 标 deprecated)
 - `MemorySaver` 作 Checkpointer(开发用,Task 4.5 升级 SqliteSaver/MySQLSaver)
 - 工具复用 `tools.ts:runTool`,用闭包 wrap 成 LangChain tool(sources 通过闭包 sourceMap 旁路透出)
@@ -615,6 +626,7 @@ LangGraph 的 `MemorySaver` / `SqliteSaver` 是**框架自身的 thread 状态�
 - AG-UI 事件协议 0 改动(adapter 层翻译 LangGraph `streamEvents v2`)
 
 保留资产:
+
 - 手写 `runAgentStream` / `postChatStream` 等**直接删除**,`src/agent/llm.ts` 瘦身为只导出 3 个类型(理由:留死代码会腐烂);"手写 vs LangGraph 对比" STAR 故事写在 `docs/03-开发笔记/note-04`
 - AG-UI 协议、tools.ts、sanitize.ts、prompts/、sources/ 全部复用
 
@@ -637,6 +649,7 @@ LangGraph 的 `MemorySaver` / `SqliteSaver` 是**框架自身的 thread 状态�
 **背景**:原本 `agent_run_events` 以 MySQL JSON 行形式高频 INSERT(每个 token / tool 事件一行),同一 Run 几百行很常见;阅读生命期均 < 1h(前端续订完就不再查)——冷数据占据高频表是典型反模式。
 
 **决策范围**(渐进型,只迁事件流):
+
 - **迁**:`agent_run_events` 写入 + 续订 → Redis Stream `run:{runId}:events`(XADD `{seq}-0` 显式 ID)
 - **不迁**:`agent_runs` 状态机 + `chat_sessions` / `chat_messages` 业务表 — 继续 MySQL(FK CASCADE 全部保留)
 - **热冷分层**:Run 终态时全段 XRANGE 走 INSERT IGNORE 进 `archived_run_events` 冷库,Redis 则 EXPIRE 1h 给续订缓冲(不 DEL,避免刚归档完前端续订拿不到)
@@ -647,6 +660,7 @@ LangGraph 的 `MemorySaver` / `SqliteSaver` 是**框架自身的 thread 状态�
 **为什么迁事件流(方案 B,选中)**:Stream 的 **高频 append + 容量可控(EXPIRE)+ 微秒级 XRANGE 范围查** 刚好处理这类冷读热写场景;且 Stream ID 可设 `{seq}-0` 让 Redis 帮我们拒乱序写(等价 MySQL PRIMARY KEY 保护),seq 语义对前端零变更。
 
 **关键不变量**:
+
 - **seq 序语义零变更**:`RunHandle.seqCounter` 应用层自增 → XADD 显式 ID,前端 `?after_seq=N` 续订接口查阅逻辑不变
 - **双源读取**:`subscribe` 先 `streamExists` 判断,活跃期 / 归档后 1h 缓冲期走 Redis;过期后走 `archived_run_events` 冷库
 - **归档幂等**:`bulkInsertArchivedEvents` 用 INSERT IGNORE,归档失败不 DEL Stream,下次 `cleanupOnStartup` 扫 `run:*:events` 重试
@@ -658,55 +672,55 @@ LangGraph 的 `MemorySaver` / `SqliteSaver` 是**框架自身的 thread 状态�
 
 ## 6. 已知局限与演进路线
 
-| 局限 | 当前症状 | 修复 Task | 备注 |
-|------|---------|----------|------|
-| ~~切走会话 = 任务终止~~ | ✅ **整合-2 已修复**:客户端断开 = unsubscribe(Run 继续写库) | — | e2e smoke 验证通过(lastEventSeq 持续涨) |
-| ~~无主动取消按钮~~ | ✅ **整合-2 已修复**:`POST /runs/:runId/cancel` + 前端「停止」按钮 | — | 三态 abort 模型(per-subscriber vs per-run 互不级联) |
-| `[ASK_USER]` 是字符串协议 | 模型偶尔会忘记加前缀;且无法附带结构化 schema | 后续可单独评估升级 LangGraph 原生 `interrupt()` | 当前协议工作正常,不阻塞 |
-| 进程重启后 Run 不自动续跑 | 启动时把 running 全标 failed;前端续订时拿到 `active=null`(但 cleanupOnStartup 会扫 Redis 残留 stream 兜底归档,不丢历史事件) | 多副本启动时需要跨进程订阅端(本期未接) | Task 5.4 完成后:跨进程订阅未接,但 Pub/Sub PUBLISH 已到位 |
-| Redis 单节点 | AOF everysec 宕机最多丢 1s 事件;未接哨兵 / 集群 | 生产化阶段接 sentinel 或 cluster | 学习项目当前可接受 |
-| 跨进程订阅端未接(Task 5.4) | 多副本部署时,另一进程启的 Run 本进程无法实时订阅(走 XRANGE 轮询可代替,但延迟高) | 后续 Task:Pub/Sub 订阅端接入 RunManager.subscribe 内存 Map | PUBLISH 已 best-effort,嵌入点在 `runEventStore.appendEvent` |
-| 评测无重试 | LLM 服务抖动时单次评测 fail,不可信 | Task 5.3 容错与重试 | 见 exp-02 第 2 轮事故 |
-| LLM 请求只盯总时长 | 服务长时间不下发数据但 keep-alive 时 timeout 不触发 | Task 5.3 stream-idle timeout | postChatStream 需要增加空闲监控 |
-| `estimateTokens` 精度差 | `length / 2` 在长 prompt 上误差 ±20% | Task 5.5 网关层接入 tiktoken | 不同 tokenizer 不通用是阻塞点 |
-| ~~静态 RAG 不适合实时数据场景~~ | ✅ **2026-06-01 决策回滚**:整套 RAG 链路删除,改用 Task 4.0 web_search + Task 4.4 MCP/Skills 实现动态 RAG | — | 详见 §5.9 决策 |
-| 数据库只覆盖 3 个目的地 | seed 硬编码成都/丽江/哈尔滨,其他城市靠 web_search | Task 4.4 MCP 接入高德/和风等 source 后,SQL 工具 + MySQL seed 可能整体退役 | 详见 `开发规划.md` Task 4.4 |
-| 多 Agent 协作 | 当前是单 Agent ReAct | Task 5.1 Supervisor 模式 | 阶段5 |
-| 注入检测纯靠正则规则 | 规则库有限,新型注入(语义级、多语种变体)可能漏检 | 阶段5 Task 5.3 引入 LLM-as-judge 二次校验 / 规则热更新 | 当前 11 条规则覆盖常见模式;实测 5/5 通过 |
-| 输出过滤只做"system prompt 泄露检测" | 没做 PII / 密钥 / 暴力内容过滤 | 阶段5 Task 5.5 网关层 + 项目无 PII 场景暂不紧迫 | 当前项目不涉及个人数据 |
-| sources 字段前端未消费 | RUN_FINISHED.sources 已透出(union 类型),但 web/src/App.tsx 尚未渲染"来源"标签 | 任意 web 迭代任务 | 后端契约已就位 |
-| web_search 无 key 时降级 | 未配 TAVILY_API_KEY 时模型走 SQL 兜底或如实告知用户 | 部署时配 key 即可 | 评测 `hardFailRate=0%` |
-| ~~MiniMax `<think>` 标签污染回答~~ | ✅ **Task 4.1.A 已修复**:adapter 把 `<think>...</think>` 拆成 THINKING_* 事件,前端折叠显示;text 字段不再含 think 内容 | — | thinkSplit 单测 11 种边界全通过 |
-| ~~工具调用 / Run summary 无 info 日志~~ | ✅ **Task 4.1.B + 4.1.C 已修复**:每轮 `'tool finished' { tool, durationMs, ... }` + finalize 一次 `'run summary' { runId, durationMs, totalTokens, costUsd, toolStats }` | — | 所有日志带 runId child binding,grep 可拿全链路 |
-| Plan 模式不擅长反问 / 注入场景 | plan 强制 steps ≥ 1,反问类 case 被迫规划无意义工具(实测 `ask-01` 慢 +15s) | 后续可加 "若问题信息不足,plan 输出 steps:[]" 协议(目前刻意保留作 ReAct 对比点) | 实测见 `exp-05-plan-vs-react-*.json` |
-| Plan 模式不支持步骤间参数引用 | 第 2 步无法用第 1 步结果(如先 search 拿 id 再 detail by id) | Task 4.4 接 MCP 后由更智能的 supervisor 处理 | 简化版,刻意保留作教学对比 |
-| ~~Plan_GENERATED 前端未渲染~~ | ✅ **已修复**:`web/src/App.tsx` 加 `ChatMsg.plan` 字段、`PLAN_GENERATED` case、`<details open>` 计划清单 UI(显示 rationale + 步骤 × N + 工具名);同时输入区上方加 `react / plan` segment 单选切换 | — | mode 选择默认 react,UI 不强制重置;`api.sendMessageStream` 加 mode 参数透传 |
+| 局限                                    | 当前症状                                                                                                                                                                                         | 修复 Task                                                                      | 备注                                                                       |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
+| ~~切走会话 = 任务终止~~                 | ✅ **整合-2 已修复**:客户端断开 = unsubscribe(Run 继续写库)                                                                                                                                      | —                                                                              | e2e smoke 验证通过(lastEventSeq 持续涨)                                    |
+| ~~无主动取消按钮~~                      | ✅ **整合-2 已修复**:`POST /runs/:runId/cancel` + 前端「停止」按钮                                                                                                                               | —                                                                              | 三态 abort 模型(per-subscriber vs per-run 互不级联)                        |
+| `[ASK_USER]` 是字符串协议               | 模型偶尔会忘记加前缀;且无法附带结构化 schema                                                                                                                                                     | 后续可单独评估升级 LangGraph 原生 `interrupt()`                                | 当前协议工作正常,不阻塞                                                    |
+| 进程重启后 Run 不自动续跑               | 启动时把 running 全标 failed;前端续订时拿到 `active=null`(但 cleanupOnStartup 会扫 Redis 残留 stream 兜底归档,不丢历史事件)                                                                      | 多副本启动时需要跨进程订阅端(本期未接)                                         | Task 5.4 完成后:跨进程订阅未接,但 Pub/Sub PUBLISH 已到位                   |
+| Redis 单节点                            | AOF everysec 宕机最多丢 1s 事件;未接哨兵 / 集群                                                                                                                                                  | 生产化阶段接 sentinel 或 cluster                                               | 学习项目当前可接受                                                         |
+| 跨进程订阅端未接(Task 5.4)              | 多副本部署时,另一进程启的 Run 本进程无法实时订阅(走 XRANGE 轮询可代替,但延迟高)                                                                                                                  | 后续 Task:Pub/Sub 订阅端接入 RunManager.subscribe 内存 Map                     | PUBLISH 已 best-effort,嵌入点在 `runEventStore.appendEvent`                |
+| 评测无重试                              | LLM 服务抖动时单次评测 fail,不可信                                                                                                                                                               | Task 5.3 容错与重试                                                            | 见 exp-02 第 2 轮事故                                                      |
+| LLM 请求只盯总时长                      | 服务长时间不下发数据但 keep-alive 时 timeout 不触发                                                                                                                                              | Task 5.3 stream-idle timeout                                                   | postChatStream 需要增加空闲监控                                            |
+| `estimateTokens` 精度差                 | `length / 2` 在长 prompt 上误差 ±20%                                                                                                                                                             | Task 5.5 网关层接入 tiktoken                                                   | 不同 tokenizer 不通用是阻塞点                                              |
+| ~~静态 RAG 不适合实时数据场景~~         | ✅ **2026-06-01 决策回滚**:整套 RAG 链路删除,改用 Task 4.0 web_search + Task 4.4 MCP/Skills 实现动态 RAG                                                                                         | —                                                                              | 详见 §5.9 决策                                                             |
+| 数据库只覆盖 3 个目的地                 | seed 硬编码成都/丽江/哈尔滨,其他城市靠 web_search                                                                                                                                                | Task 4.4 MCP 接入高德/和风等 source 后,SQL 工具 + MySQL seed 可能整体退役      | 详见 `开发规划.md` Task 4.4                                                |
+| 多 Agent 协作                           | 当前是单 Agent ReAct                                                                                                                                                                             | Task 5.1 Supervisor 模式                                                       | 阶段5                                                                      |
+| 注入检测纯靠正则规则                    | 规则库有限,新型注入(语义级、多语种变体)可能漏检                                                                                                                                                  | 阶段5 Task 5.3 引入 LLM-as-judge 二次校验 / 规则热更新                         | 当前 11 条规则覆盖常见模式;实测 5/5 通过                                   |
+| 输出过滤只做"system prompt 泄露检测"    | 没做 PII / 密钥 / 暴力内容过滤                                                                                                                                                                   | 阶段5 Task 5.5 网关层 + 项目无 PII 场景暂不紧迫                                | 当前项目不涉及个人数据                                                     |
+| sources 字段前端未消费                  | RUN_FINISHED.sources 已透出(union 类型),但 web/src/App.tsx 尚未渲染"来源"标签                                                                                                                    | 任意 web 迭代任务                                                              | 后端契约已就位                                                             |
+| web_search 无 key 时降级                | 未配 TAVILY_API_KEY 时模型走 SQL 兜底或如实告知用户                                                                                                                                              | 部署时配 key 即可                                                              | 评测 `hardFailRate=0%`                                                     |
+| ~~MiniMax `<think>` 标签污染回答~~      | ✅ **Task 4.1.A 已修复**:adapter 把 `<think>...</think>` 拆成 THINKING\_\* 事件,前端折叠显示;text 字段不再含 think 内容                                                                          | —                                                                              | thinkSplit 单测 11 种边界全通过                                            |
+| ~~工具调用 / Run summary 无 info 日志~~ | ✅ **Task 4.1.B + 4.1.C 已修复**:每轮 `'tool finished' { tool, durationMs, ... }` + finalize 一次 `'run summary' { runId, durationMs, totalTokens, costUsd, toolStats }`                         | —                                                                              | 所有日志带 runId child binding,grep 可拿全链路                             |
+| Plan 模式不擅长反问 / 注入场景          | plan 强制 steps ≥ 1,反问类 case 被迫规划无意义工具(实测 `ask-01` 慢 +15s)                                                                                                                        | 后续可加 "若问题信息不足,plan 输出 steps:[]" 协议(目前刻意保留作 ReAct 对比点) | 实测见 `exp-05-plan-vs-react-*.json`                                       |
+| Plan 模式不支持步骤间参数引用           | 第 2 步无法用第 1 步结果(如先 search 拿 id 再 detail by id)                                                                                                                                      | Task 4.4 接 MCP 后由更智能的 supervisor 处理                                   | 简化版,刻意保留作教学对比                                                  |
+| ~~Plan_GENERATED 前端未渲染~~           | ✅ **已修复**:`web/src/App.tsx` 加 `ChatMsg.plan` 字段、`PLAN_GENERATED` case、`<details open>` 计划清单 UI(显示 rationale + 步骤 × N + 工具名);同时输入区上方加 `react / plan` segment 单选切换 | —                                                                              | mode 选择默认 react,UI 不强制重置;`api.sendMessageStream` 加 mode 参数透传 |
 
 ---
 
 ## 7. 维护清单(本文档应当何时更新)
 
-| 你改了什么 | 检查本文档哪几节 |
-|----------|----------------|
-| 新增/删除 HTTP 路由 | §2 API 一览 + §3 对应小节 + §1.1 分层图 |
-| 改 `runAgentStream` 主循环 | §3.2.2 ReAct 主循环细节 + §4.2 AG-UI 事件时序 |
-| 改 `postChatStream` / LLM 调用 | §3.2.2 + §4.3 Token 链路 + §5.2 |
-| 改 prompts/ 目录(新版本、新 section) | §4.1 messages 拼接顺序 + §1.2 模块职责 |
-| 改 tools.ts(新工具、改 schema) | §1.2 模块职责 + §3.2.2 ReAct 工具调用部分 |
-| 改 abort / 中断行为 | §3.3 中断处理 + §5.5 + §6 |
-| 改 chat_sessions / chat_messages schema | §3.4 / §3.5 + §1.2 + §6 局限对照 |
-| 落地某个规划 Task | §6 局限表标记移除 + 必要时新增决策小节到 §5 |
-| 引入新模块(eval/、mcp/、skills/、agents/) | §1.1 分层图 + §1.2 职责表 |
-| 改 sanitize.ts 规则库 / 检测策略 | §1.2 模块职责 + §3.2 时序图入口节点 + §5.6 决策 + §6 局限表注入检测条目 |
-| 改 tools.ts(增删工具 / 改 schema) | §1.2 模块职责 + §3.6 工具一览;若 web_search 流程变化同步 §4.4 |
-| 改 webSearchCache.ts(TTL、key 算法等) | §1.2 模块职责 + §4.4 缓存层路径 |
-| 改 langgraph-agent.ts / langgraphToAgUi.ts(整合-1 后) | §1.2 模块表 Agent 主线 + §5.8 LangGraph 切换决策;若新事件类型同步 §4.2 |
-| 改 runManager.ts / runRepo.ts(整合-2 核心) | §1.2 模块表 Run 管理器 / Run 仓库 + §5.7 Run-as-Resource 决策 + §6 局限表续订 / cancel 条目 |
-| 改 redis/pool.ts / redis/runEventStore.ts(Task 5.4) | §1.1 分层图 + §1.2 Redis 热层行 + §5.10 决策 + `note-06-redis-hot-layer.md` |
-| 改 archived_run_events schema | DB migration 006 + §1.2 + §5.10 不变量 |
-| 改 agent_runs / agent_run_events schema | DB migration 003 + §1.2 + §6 |
-| 加 / 改 /runs/* HTTP 路由 | §2 API 一览 |
-| 改 ag-ui.ts 的 Source 类型(union 分支) | §1.2 AG-UI 协议行 + §4.4 sources 路径 |
+| 你改了什么                                            | 检查本文档哪几节                                                                            |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| 新增/删除 HTTP 路由                                   | §2 API 一览 + §3 对应小节 + §1.1 分层图                                                     |
+| 改 `runAgentStream` 主循环                            | §3.2.2 ReAct 主循环细节 + §4.2 AG-UI 事件时序                                               |
+| 改 `postChatStream` / LLM 调用                        | §3.2.2 + §4.3 Token 链路 + §5.2                                                             |
+| 改 prompts/ 目录(新版本、新 section)                  | §4.1 messages 拼接顺序 + §1.2 模块职责                                                      |
+| 改 tools.ts(新工具、改 schema)                        | §1.2 模块职责 + §3.2.2 ReAct 工具调用部分                                                   |
+| 改 abort / 中断行为                                   | §3.3 中断处理 + §5.5 + §6                                                                   |
+| 改 chat_sessions / chat_messages schema               | §3.4 / §3.5 + §1.2 + §6 局限对照                                                            |
+| 落地某个规划 Task                                     | §6 局限表标记移除 + 必要时新增决策小节到 §5                                                 |
+| 引入新模块(eval/、mcp/、skills/、agents/)             | §1.1 分层图 + §1.2 职责表                                                                   |
+| 改 sanitize.ts 规则库 / 检测策略                      | §1.2 模块职责 + §3.2 时序图入口节点 + §5.6 决策 + §6 局限表注入检测条目                     |
+| 改 tools.ts(增删工具 / 改 schema)                     | §1.2 模块职责 + §3.6 工具一览;若 web_search 流程变化同步 §4.4                               |
+| 改 webSearchCache.ts(TTL、key 算法等)                 | §1.2 模块职责 + §4.4 缓存层路径                                                             |
+| 改 langgraph-agent.ts / langgraphToAgUi.ts(整合-1 后) | §1.2 模块表 Agent 主线 + §5.8 LangGraph 切换决策;若新事件类型同步 §4.2                      |
+| 改 runManager.ts / runRepo.ts(整合-2 核心)            | §1.2 模块表 Run 管理器 / Run 仓库 + §5.7 Run-as-Resource 决策 + §6 局限表续订 / cancel 条目 |
+| 改 redis/pool.ts / redis/runEventStore.ts(Task 5.4)   | §1.1 分层图 + §1.2 Redis 热层行 + §5.10 决策 + `note-06-redis-hot-layer.md`                 |
+| 改 archived_run_events schema                         | DB migration 006 + §1.2 + §5.10 不变量                                                      |
+| 改 agent_runs / agent_run_events schema               | DB migration 003 + §1.2 + §6                                                                |
+| 加 / 改 /runs/\* HTTP 路由                            | §2 API 一览                                                                                 |
+| 改 ag-ui.ts 的 Source 类型(union 分支)                | §1.2 AG-UI 协议行 + §4.4 sources 路径                                                       |
 
 **维护铁律**:任何 PR 涉及上述变更,**必须在 PR 描述里勾选已更新本文档的章节**。Claude Code 接手开发时,提交前应回到本文档自检。
 

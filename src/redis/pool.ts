@@ -16,16 +16,16 @@ import { Redis } from 'ioredis'
 let _redis: Redis | null = null
 
 export function createRedis(url: string): Redis {
-  if (_redis) return _redis
-  const client = new Redis(url, {
-    // 命令级重试:断线时自动重连并 replay 未完成命令(默认行为,显式声明)
-    maxRetriesPerRequest: 3,
-    enableOfflineQueue: true,
-    // 启动时立即建连,失败立刻抛错(避免延迟到第一次命令时才发现)
-    lazyConnect: false
-  })
-  _redis = client
-  return client
+    if (_redis) return _redis
+    const client = new Redis(url, {
+        // 命令级重试:断线时自动重连并 replay 未完成命令(默认行为,显式声明)
+        maxRetriesPerRequest: 3,
+        enableOfflineQueue: true,
+        // 启动时立即建连,失败立刻抛错(避免延迟到第一次命令时才发现)
+        lazyConnect: false
+    })
+    _redis = client
+    return client
 }
 
 export type RedisClient = Redis
@@ -35,12 +35,12 @@ export type RedisClient = Redis
  * SIGTERM/SIGINT 钩子调用
  */
 export async function closeRedis(): Promise<void> {
-  if (!_redis) return
-  try {
-    await _redis.quit()
-  } catch {
-    // 已经断开就忽略
-    _redis.disconnect()
-  }
-  _redis = null
+    if (!_redis) return
+    try {
+        await _redis.quit()
+    } catch {
+        // 已经断开就忽略
+        _redis.disconnect()
+    }
+    _redis = null
 }
