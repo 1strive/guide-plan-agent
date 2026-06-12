@@ -1,14 +1,41 @@
-/**
- * ThinkingBlock — 折叠的思考过程块
- * 颜色严格走 token：底 muted、字 muted-foreground。
- */
+import { useState } from "react";
+import { IconLightbulb, IconChevronDown } from "../components/Icons";
+
 export function ThinkingBlock({ thinking }: { thinking: string }) {
+  const [open, setOpen] = useState(true);
+
   return (
-    <details className="mb-4 text-[0.85em] text-muted-foreground">
-      <summary className="cursor-pointer select-none py-1.5">思考过程</summary>
-      <pre className="mt-2.5 px-4 py-3 bg-muted rounded-md whitespace-pre-wrap break-words font-[inherit] text-[inherit] leading-relaxed">
+    <div
+      className={
+        "mb-3 rounded-xl overflow-hidden bg-think-bg border border-think-border " +
+        (!open ? "thinking-collapsed" : "")
+      }
+    >
+      <button
+        className="flex items-center gap-2 px-3.5 py-2.5 w-full text-left text-[13px] font-medium text-think-accent hover:bg-[oklch(93%_0.016_250)] transition-colors"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <IconLightbulb size={14} />
+        <span className="flex-1">思考过程</span>
+        <IconChevronDown
+          size={14}
+          className={
+            "text-fg-subtle transition-transform duration-200 " +
+            (!open ? "-rotate-90" : "")
+          }
+        />
+      </button>
+      <div
+        className="px-3.5 pb-3 text-[13px] leading-[1.7] text-think-content whitespace-pre-wrap break-words transition-all duration-300 ease-in-out overflow-hidden"
+        style={{
+          maxHeight: open ? "600px" : "0",
+          paddingTop: open ? undefined : "0",
+          paddingBottom: open ? undefined : "0",
+          opacity: open ? 1 : 0,
+        }}
+      >
         {thinking}
-      </pre>
-    </details>
+      </div>
+    </div>
   );
 }

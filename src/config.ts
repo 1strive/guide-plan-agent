@@ -42,7 +42,13 @@ const envSchema = dbEnvSchema.extend({
   MCP_AMAP_API_KEY: z.string().default(''),
   MCP_FILESYSTEM_ALLOWED_DIRS: z.string().default(''),
   // Task 4.3:记忆分层 — 会话消息数超过此阈值时触发 LLM 摘要
-  MEMORY_SUMMARY_THRESHOLD: z.coerce.number().default(20)
+  MEMORY_SUMMARY_THRESHOLD: z.coerce.number().default(20),
+  // Task 5.4 — Redis 热层(agent_run_events 高频写 + 跨进程广播预留)
+  // 八股:08-工程化实践.md §4 缓存与热层(冷热分层)
+  // REDIS_URL:ioredis 连接串;docker-compose 映射 6380 避开本机 6379
+  // REDIS_EVENT_TTL_SEC:Run finalize 归档完成后 Stream 保留时长(秒),给续订 1h 缓冲
+  REDIS_URL: z.string().default('redis://127.0.0.1:6380'),
+  REDIS_EVENT_TTL_SEC: z.coerce.number().default(3600)
 })
 
 export type AppConfig = z.infer<typeof envSchema>

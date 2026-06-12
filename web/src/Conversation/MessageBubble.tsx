@@ -3,46 +3,53 @@ import { TextContent } from "./TextContent";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolCallChip } from "./ToolCallChip";
 import { InterruptCard } from "../ChatInput/InterruptCard";
+import { Toolbox } from "./Toolbox";
+import { QuickReplies } from "./QuickReplies";
+import { IconCompass } from "../components/Icons";
 
-/**
- * 消息气泡 — 样式严格遵循 DESIGN.md §7.4 Message Bubble
- * - user      主色底反白字，右对齐，右下角收角
- * - assistant 卡片底，左对齐，左下角收角
- * - interrupt 营营负背景 + accent 描边，顶部带徽章
- */
-const BASE =
-  "max-w-[80%] px-5 py-4 rounded-lg text-sm leading-relaxed whitespace-pre-wrap break-words";
-
-const USER_CLS = "bg-primary text-primary-foreground ml-auto rounded-br-sm";
-const AI_CLS =
-  "bg-card text-card-foreground border border-border mr-auto rounded-bl-sm";
-const INTERRUPT_CLS =
-  "bg-[color-mix(in_srgb,var(--accent)_10%,var(--card))] text-card-foreground border border-accent mr-auto rounded-bl-sm";
-
-export function MessageBubble({ msg }: { msg: ChatMsg }) {
-  const cls = msg.interrupt
-    ? `${BASE} ${INTERRUPT_CLS}`
-    : msg.role === "user"
-      ? `${BASE} ${USER_CLS}`
-      : `${BASE} ${AI_CLS}`;
-
+function UserBubble({ content }: { content: string }) {
   return (
-    <div className={cls}>
-      {msg.interrupt && (
-        <div className="inline-block px-3 py-1 rounded-[10px] bg-accent text-accent-foreground text-xs font-semibold mb-2.5">
-          需要补充信息
-        </div>
-      )}
-      {msg.thinking && <ThinkingBlock thinking={msg.thinking} />}
-      <TextContent content={msg.content} />
-      {msg.interrupt && <InterruptCard interrupt={msg.interrupt} />}
-      {msg.toolCalls && msg.toolCalls.length > 0 && (
-        <div className="flex flex-wrap gap-2 mt-3.5">
-          {msg.toolCalls.map((tc, j) => (
-            <ToolCallChip key={j} toolCall={tc} />
-          ))}
-        </div>
-      )}
+    <div className="flex justify-end mb-6">
+      <div className="bg-user-bg text-user-fg px-4 py-2.5 rounded-xl rounded-br-sm max-w-[560px] text-sm leading-[1.65] whitespace-pre-wrap break-words">
+        {content}
+      </div>
     </div>
   );
+}
+
+function AssistantBubble({ msg }: { msg: ChatMsg }) {
+  return (
+    <div className="flex gap-3 items-start mb-6 group">
+      <div className="w-7 h-7 rounded-lg bg-accent-soft text-primary grid place-items-center flex-shrink-0 mt-0.5">
+        <IconCompass size={16} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-xs font-semibold text-fg-muted mb-1.5">路书</div>
+        {msg.interrupt && (
+          <div className="inline-block px-3 py-1 rounded-lg bg-accent text-accent-foreground text-xs font-semibold mb-2">
+            需要补充信息
+          </div>
+        )}
+        {msg.thinking && <ThinkingBlock thinking={msg.thinking} />}
+        <TextContent content={msg.content} />
+        {msg.toolCalls && msg.toolCalls.length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-3">
+            {msg.toolCalls.map((tc, j) => (
+              <ToolCallChip key={j} toolCall={tc} />
+            ))}
+          </div>
+        )}
+        {msg.interrupt && <InterruptCard interrupt={msg.interrupt} />}
+        {msg.content && <Toolbox content={msg.content} />}
+        {msg.quickReplies && <QuickReplies options={msg.quickReplies} />}
+      </div>
+    </div>
+  );
+}
+
+export function MessageBubble({ msg }: { msg: ChatMsg }) {
+  if (msg.role === "user") {
+    return <UserBubble content={msg.content} />;
+  }
+  return <AssistantBubble msg={msg} />;
 }

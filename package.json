@@ -8,7 +8,7 @@
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "setup": "docker compose up -d && tsx scripts/migrate.ts",
-    "web:dev": "cd web && npm run dev",
+    "web": "cd web && npm run dev",
     "eval": "tsx scripts/eval-prompt.ts",
     "eval:base": "tsx scripts/eval-prompt.ts --version v1_base",
     "eval:cot": "tsx scripts/eval-prompt.ts --version v2_cot",
@@ -26,6 +26,7 @@
     "@langchain/openai": "^1.4.7",
     "dotenv": "^17.4.2",
     "fastify": "^5.2.0",
+    "ioredis": "^5.11.1",
     "langchain": "^1.4.2",
     "mysql2": "^3.11.5",
     "zod": "^3.24.1"

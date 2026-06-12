@@ -26,7 +26,8 @@ import { detectInjection, wrapUntrusted, detectSystemLeak } from './agent/saniti
 import { RunManager } from './agent/runManager.js'
 import { McpManager } from './mcp/client.js'
 import { getSessionSummary } from './db/chatRepo.js'
-import { getRunById, queryEventsAfter } from './db/runRepo.js'
+import { getRunById } from './db/runRepo.js'
+import { createRedis, closeRedis } from './redis/pool.js'
 import type { AgUiEvent } from './agent/ag-ui.js'
 import { EventType, type RunFinishedEvent, type TextMessageContentEvent } from './agent/ag-ui.js'
 
@@ -49,6 +50,8 @@ function createLogger() {
 async function main() {
   const config = loadConfig()
   const pool = createPool(config)
+  // Task 5.4(Redis 热层改造):启动 Redis 单例,作为事件流热层与 Pub/Sub 广播预留
+  const redis = createRedis(config.REDIS_URL)
   const app = Fastify({ loggerInstance: createLogger() })
 
   await app.register(cors, { origin: true })
@@ -61,17 +64,20 @@ async function main() {
   }
 
   // Task 整合-2:进程内 Run 注册表;cleanupOnStartup 清理上次残留的 running 状态
-  const runManager = new RunManager(pool, config, app.log, mcpManager, recordRunMetrics)
+  // Task 5.4:注入 redis,RunManager 内部走 Redis Stream 替代 agent_run_events 高频写
+  const runManager = new RunManager(pool, redis, config, app.log, mcpManager, recordRunMetrics)
   await runManager.cleanupOnStartup()
 
 
   app.get('/health', async (_req, reply) => {
     try {
       await pool.query('SELECT 1')
-      return { ok: true, db: true }
+      // Task 5.4:并入 Redis PING 探活;任一失败整体 503
+      const pong = await redis.ping()
+      return { ok: true, db: true, redis: pong === 'PONG' }
     } catch (e) {
       reply.status(503)
-      return { ok: false, db: false, error: String(e) }
+      return { ok: false, error: String(e) }
     }
   })
 
@@ -413,11 +419,13 @@ async function main() {
   })
 
   // 八股 08 §5.3:进程退出前优雅关闭
+  // Task 5.4:Redis 在 pool.end 之前 quit,避免归档收尾时连接已关
   const shutdown = async (signal: string) => {
     app.log.info({ signal }, 'shutting down')
     try {
       await app.close()
       await mcpManager.shutdown()
+      await closeRedis()
       await pool.end()
     } catch (err) {
       app.log.error({ err }, 'shutdown error')
@@ -439,9 +447,6 @@ function writeSseEvent(reply: import('fastify').FastifyReply, event: unknown): v
     /* socket closed */
   }
 }
-
-// 未使用但保留导出供未来扩展:精细查询事件回放(测试用)
-void queryEventsAfter
 
 main().catch((err) => {
   console.error(err)

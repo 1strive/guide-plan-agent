@@ -14,6 +14,13 @@
  * - **状态机推进**:pending → running → {completed | interrupted | cancelling → cancelled | failed}
  * - **Checkpointer 不升级**:继续 MemorySaver,LangGraph 内部 thread 状态进程内活;
  *   "进程重启真正续跑"留给 Task 5.4(配合 Redis Pub/Sub 跨进程)
+ *
+ * Task 5.4 (2026-06-10) 热层改造:
+ * - 事件流高频写入迁至 Redis Stream(src/redis/runEventStore.ts)
+ * - PUBLISH 同步广播到 Redis Channel(为未来多副本跨进程订阅预留)
+ * - subscribe 双源读取:活跃/缓冲期走 Redis,过期后走 archived_run_events 冷库
+ * - finalize 时整段归档 Redis Stream → archived_run_events,不删 Stream(EXPIRE 1h 给续订缓冲)
+ * - cleanupOnStartup 兑底:扫描 Redis 残留 stream 归档并让其过期
  */
 
 import { randomUUID } from 'node:crypto'
@@ -28,13 +35,12 @@ import { maybeUpdateMemory } from './memory.js'
 // Task 4.4:MCP 工具管理器
 import type { McpManager } from '../mcp/client.js'
 import {
-  appendEvent as repoAppendEvent,
   createRun,
   getActiveRunBySession,
   getRunById,
   incrementRunTokens,
   markAllRunningAsFailed,
-  queryEventsAfter,
+  queryArchivedEventsAfter,
   updateRunStatus,
   type AgentRunRow,
   type AgentRunStatus
@@ -46,6 +52,15 @@ import {
   updateSessionStatus
 } from '../db/chatRepo.js'
 import { computeCostUsd } from './token-usage.js'
+// Task 5.4:Redis 热层(事件流 + Pub/Sub)
+import type { RedisClient } from '../redis/pool.js'
+import {
+  appendEvent as redisAppendEvent,
+  archiveAndCleanup,
+  listOrphanRuns,
+  queryEventsAfter as redisQueryEventsAfter,
+  streamExists
+} from '../redis/runEventStore.js'
 
 export type Subscriber = {
   id: string
@@ -93,6 +108,8 @@ export class RunManager {
 
   constructor(
     private pool: DbPool,
+    // Task 5.4:Redis 客户端(事件流热层 + 跨进程广播预留)
+    private redis: RedisClient,
     private config: AppConfig,
     private log: FastifyBaseLogger,
     // Task 4.4:MCP 工具管理器,getTools() 返回 LangChain StructuredTool[]
@@ -103,6 +120,7 @@ export class RunManager {
 
   /**
    * 启动时清理上次进程残留(failed)+ 同步 chat_sessions.status
+   * + Task 5.4:兑底归档 Redis 中上次未及归档的 Stream
    * main() 在 listen 前调用一次
    */
   async cleanupOnStartup(): Promise<void> {
@@ -113,6 +131,25 @@ export class RunManager {
         { runsCleaned, sessionsCleaned },
         'startup cleanup: marked stale running runs as failed'
       )
+    }
+    // Task 5.4:扫描 Redis 残留 stream(上次进程崩溃未走完 finalize)
+    // 对每个残留 stream 调 archiveAndCleanup:批量入冷库 + EXPIRE TTL,避免事件丢失
+    try {
+      const orphanRuns = await listOrphanRuns(this.redis)
+      let archived = 0
+      for (const runId of orphanRuns) {
+        try {
+          await archiveAndCleanup(this.redis, this.pool, runId, this.config.REDIS_EVENT_TTL_SEC)
+          archived++
+        } catch (err) {
+          this.log.error({ runId, err: String(err) }, 'startup orphan archive failed')
+        }
+      }
+      if (orphanRuns.length > 0) {
+        this.log.warn({ orphanCount: orphanRuns.length, archived }, 'startup: archived orphan redis streams')
+      }
+    } catch (err) {
+      this.log.error({ err: String(err) }, 'startup orphan scan failed')
     }
   }
 
@@ -187,6 +224,10 @@ export class RunManager {
   /**
    * 新订阅者接入:回放历史事件 + 加入实时广播
    * @param afterSeq 续订起点(0 = 从头);打开会话时前端传已知 lastEventSeq
+   *
+   * Task 5.4 双源读取:
+   * - Redis Stream 存在(活跃期 / 归档后 1h 缓冲期) → 走 Redis(零延迟)
+   * - Stream 已过期 / 不存在 → 走 archived_run_events 冷库
    * @returns unsubscribe 函数
    */
   async subscribe(
@@ -197,8 +238,15 @@ export class RunManager {
   ): Promise<() => void> {
     const subscriberId = randomUUID()
 
-    // 1. 先回放历史(可能 Run 已结束,只回放即可)
-    const historicalEvents = await queryEventsAfter(this.pool, runId, afterSeq)
+    // 1. 先回放历史(双源:Redis 热层 优先, 冷库兑底)
+    let historicalEvents: { seq: number; eventJson: unknown }[]
+    if (await streamExists(this.redis, runId)) {
+      const rows = await redisQueryEventsAfter(this.redis, runId, afterSeq)
+      historicalEvents = rows
+    } else {
+      const rows = await queryArchivedEventsAfter(this.pool, runId, afterSeq)
+      historicalEvents = rows.map((r) => ({ seq: r.seq, eventJson: r.eventJson }))
+    }
     for (const row of historicalEvents) {
       try {
         onEvent(row.eventJson as AgUiEvent)
@@ -293,11 +341,12 @@ export class RunManager {
   private async handleEvent(handle: RunHandle, event: AgUiEvent): Promise<void> {
     const seq = ++handle.seqCounter
 
-    // 1. 写事件流(顺序保证)
+    // 1. 写事件流 — Task 5.4:走 Redis Stream(高频append + Pub/Sub 广播)
+    //    失败不报错给业务，Run 仍然能跑完;仅记录告警(事件可能丢一跳,但不携带调用链)
     try {
-      await repoAppendEvent(this.pool, handle.runId, seq, event)
+      await redisAppendEvent(this.redis, handle.runId, seq, event)
     } catch (err) {
-      handle.log.error({ seq, err: String(err) }, 'appendEvent failed')
+      handle.log.error({ seq, err: String(err) }, 'redis appendEvent failed')
     }
 
     // 2. 处理 assistant 消息的增量持久化
@@ -373,6 +422,14 @@ export class RunManager {
       }
     } catch (err) {
       handle.log.error({ err: String(err) }, 'finalize: DB update failed')
+    }
+
+    // Task 5.4:终态归档 — Redis Stream 整段 → archived_run_events 冷库
+    // 失败不中断业务:Stream 保留供下次启动扫描兑底(cleanupOnStartup)
+    try {
+      await archiveAndCleanup(this.redis, this.pool, handle.runId, this.config.REDIS_EVENT_TTL_SEC)
+    } catch (err) {
+      handle.log.error({ err: String(err) }, 'finalize: redis archive failed; stream retained for retry')
     }
 
     // 通知所有订阅者 Run 已结束

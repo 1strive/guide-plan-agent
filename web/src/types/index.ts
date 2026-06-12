@@ -55,4 +55,5 @@ export type ChatMsg = {
   thinking?: string
   toolCalls?: ToolCallInfo[]
   interrupt?: InterruptInfo
+  quickReplies?: string[]
 }

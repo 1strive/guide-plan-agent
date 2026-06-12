@@ -44,7 +44,13 @@
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('error', d.get\\('name','?'\\)\\)\\)\")",
       "WebFetch(domain:lbs.amap.com)",
       "Bash(grep -iA3 \"npx\\\\|command\\\\|amap.*mcp\\\\|AMAP_MAPS_API_KEY\\\\|env\\\\|args\")",
-      "Bash(echo \"---EXIT=$?\")"
+      "Bash(echo \"---EXIT=$?\")",
+      "Bash(claude mcp *)",
+      "mcp__open-design__get_active_context",
+      "mcp__open-design__list_projects",
+      "mcp__open-design__get_artifact",
+      "mcp__open-design__list_files",
+      "mcp__open-design__get_file"
     ]
   }
 }

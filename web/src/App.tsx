@@ -11,7 +11,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <div className="flex h-screen overflow-hidden bg-background text-foreground">
         <Sidebar />
-        <main className="flex-1 flex flex-col px-8 py-6 gap-5 overflow-hidden max-w-4xl mx-auto w-full">
+        <main className="flex-1 flex flex-col overflow-hidden min-w-0">
           <ChatHeader />
           <MessageList />
           <InputBar />

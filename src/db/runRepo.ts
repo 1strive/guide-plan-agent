@@ -132,46 +132,69 @@ export async function markAllRunningAsFailed(pool: DbPool): Promise<number> {
 
 // ─── agent_run_events ────────────────────────────────────────────
 
+// agent_run_events 表(Task 5.4 已冻结):
+//   原高频 appendEvent / queryEventsAfter 已迁至 src/redis/runEventStore.ts(Redis Stream)
+//   旧表保留仅供历史回溯；Run 终态时归档到 archived_run_events 冷库表。
+
+// ─── archived_run_events(Task 5.4 冷库)───────────────────────
+
 /**
- * 追加事件;seq 由调用方(runManager 内存 counter)分配,确保单调递增
- * 同步更新 agent_runs.last_event_seq 便于续订时秒查
+ * Task 5.4 — 冷库批量写入(archiveAndCleanup 调用)
+ * - INSERT IGNORE:主键冲突跳过，保证重复归档幂等
+ * - 单句 multi-row INSERT:减少往返轮路
  */
-export async function appendEvent(
+export async function bulkInsertArchivedEvents(
   pool: DbPool,
   runId: string,
-  seq: number,
-  eventJson: unknown
+  events: { seq: number; eventJson: unknown }[]
 ): Promise<void> {
+  if (events.length === 0) return
+  const values: unknown[] = []
+  const placeholders: string[] = []
+  for (const e of events) {
+    placeholders.push('(?, ?, ?)')
+    values.push(runId, e.seq, JSON.stringify(e.eventJson))
+  }
   await pool.query(
-    'INSERT INTO agent_run_events (run_id, seq, event_json) VALUES (?, ?, ?)',
-    [runId, seq, JSON.stringify(eventJson)]
-  )
-  // 同步 last_event_seq 用 GREATEST 避免乱序 update 倒退(几乎不会发生,但稳)
-  await pool.query(
-    'UPDATE agent_runs SET last_event_seq = GREATEST(last_event_seq, ?) WHERE run_id = ?',
-    [seq, runId]
+    `INSERT IGNORE INTO archived_run_events (run_id, seq, event_json) VALUES ${placeholders.join(',')}`,
+    values
   )
 }
 
 /**
- * 续订查询:取 seq > afterSeq 的全部事件,顺序回放
+ * Task 5.4 — 续订冷库查询(Redis Stream 已过期后走此路)
+ * 表结构与原 agent_run_events 一致，调用方返回型不变
  */
-export async function queryEventsAfter(
+export async function queryArchivedEventsAfter(
   pool: DbPool,
   runId: string,
   afterSeq: number
 ): Promise<AgentRunEventRow[]> {
   const [rows] = await pool.query<RowDataPacket[]>(
     `SELECT seq, event_json AS eventJson, created_at AS createdAt
-     FROM agent_run_events
+     FROM archived_run_events
      WHERE run_id = ? AND seq > ?
      ORDER BY seq ASC`,
     [runId, afterSeq]
   )
-  // mysql2 的 JSON 列已自动反序列化
   return rows.map((r) => ({
     seq: r.seq as number,
     eventJson: r.eventJson as unknown,
     createdAt: r.createdAt as Date
   }))
+}
+
+/**
+ * Task 5.4 — 归档后一次性同步 last_event_seq
+ * (原设计每事件都 UPDATE,迁 Redis 后频率骤减,此函数只在归档时调一次)
+ */
+export async function updateRunLastEventSeq(
+  pool: DbPool,
+  runId: string,
+  seq: number
+): Promise<void> {
+  await pool.query(
+    'UPDATE agent_runs SET last_event_seq = GREATEST(last_event_seq, ?) WHERE run_id = ?',
+    [seq, runId]
+  )
 }

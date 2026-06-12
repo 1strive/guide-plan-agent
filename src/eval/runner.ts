@@ -7,8 +7,7 @@
  * 设计要点:
  * - 纯函数 runForEval:不走 HTTP/AG-UI 落库/chat_messages 写入,只把 messages 喂给
  *   现有 runAgentStream(复用 ReAct 主循环,避免重复实现)
- * - 工具调用仍走真实 pool:search/detail 工具读 destinations 表,所以评测前需要
- *   docker compose up + seed
+ * - 工具调用走真实 LangGraph + MCP 工具链(Task 4.4 后本地 SQL 工具已下线)
  * - 规则判定 MVP(本任务决策点):三个独立维度——工具命中、关键词命中、是否反问——
  *   任一非 null 维度失败则整体 fail。LLM-as-judge 留待后期,见 docs/02-实验记录/exp-02 局限章节
  */
@@ -142,7 +141,7 @@ export async function runForEval(
     clarification:
       expected.shouldClarify !== undefined
         ? (collected.interruptMessage !== '' || fullText.includes('[ASK_USER]')) ===
-          expected.shouldClarify
+        expected.shouldClarify
         : null,
     refused:
       expected.refused !== undefined

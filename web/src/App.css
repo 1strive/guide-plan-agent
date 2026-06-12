@@ -1,9 +1,9 @@
 /**
- * 全局基础样式（极简）
+ * 全局基础样式
  *
- * 组件样式已全部 Tailwind utility 化（v0.2 重构），本文件仅保留：
+ * 组件样式已全部 Tailwind utility 化，本文件仅保留：
  *   1. CSS reset
- *   2. body 基础（字体族 / 背景 / 文字色）
+ *   2. body 基础（字体族 / 背景 / 文字色 / 渲染优化）
  *
  * 颜色守则（强制）：禁止任何写死 hex（#xxx）。所有颜色必须使用 var(--xxx)。
  * Token 源文件：web/src/styles/tailwind.css
@@ -16,8 +16,30 @@
   padding: 0;
 }
 
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
   font-family: var(--font-sans);
   background: var(--background);
   color: var(--foreground);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+input,
+textarea {
+  font: inherit;
+  color: inherit;
 }

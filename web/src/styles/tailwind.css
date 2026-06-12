@@ -1,83 +1,105 @@
 /**
- * Travel Design System — Tokens
+ * 路书 Design System — Tokens
  *
- * 旅游主题（地中海阳光风）颜色 / 字体 / 间距 / 阴影 / 动效 token。
+ * 温暖赤陶 · 深色侧边栏 · 现代简约
+ * 基于 Open Design 原型色彩方案（oklch → hex 近似值）。
  * 所有命名沿用 shadcn 体系，便于后续接入 .dark 模式仅替换值。
  *
  * 配套规范：web/DESIGN.md
- * 使用守则：禁止任何写死 hex，必须使用 var(--xxx) 或 Tailwind 工具类（bg-primary / text-foreground 等）。
+ * 使用守则：禁止任何写死 hex，必须使用 var(--xxx) 或 Tailwind 工具类。
  */
 
 @import "tailwindcss";
 
 :root {
   /* ---------- Surface ---------- */
-  --background: #fdfaf3; /* 沙滩米白 */
-  --foreground: #1a2942; /* 深海蓝黑 */
+  --background: #f8f5f0;
+  --foreground: #2a2725;
   --surface: #ffffff;
+  --surface-alt: #f2eeea;
   --card: #ffffff;
-  --card-foreground: #1a2942;
+  --card-foreground: #2a2725;
   --popover: #ffffff;
-  --popover-foreground: #1a2942;
-  --muted: #f1eee5; /* 米沙 */
-  --muted-foreground: #6b7280;
+  --popover-foreground: #2a2725;
+  --muted: #f2eeea;
+  --muted-foreground: #706b66;
 
   /* ---------- Brand ---------- */
-  --primary: #3b82f6; /* 天空蓝 */
-  --primary-foreground: #ffffff;
-  --default: #1a2942;
-  --default-foreground: #ffffff;
+  --primary: #c4513a;
+  --primary-foreground: #fcfcfc;
+  --default: #2a2725;
+  --default-foreground: #fcfcfc;
 
   /* ---------- Semantic ---------- */
-  --secondary: #fff3e0; /* 暖阳米 */
-  --secondary-foreground: #8a4a18;
-  --accent: #f59e0b; /* 落日橙 */
-  --accent-foreground: #ffffff;
+  --secondary: #f5e6e2;
+  --secondary-foreground: #b3432d;
+  --accent: #c4513a;
+  --accent-foreground: #fcfcfc;
+  --accent-soft: #f5e6e2;
+  --accent-hover: #b3432d;
+  --success: #2d8a55;
   --destructive: #fee2e2;
   --destructive-foreground: #b91c1c;
 
   /* ---------- Form ---------- */
-  --border: #e5dfd1;
-  --input: #f5f1e8;
-  --ring: #3b82f6;
-  --button-bg-disabled: #e5dfd1;
+  --border: #e4dfda;
+  --border-strong: #ccc6c0;
+  --input: #f2eeea;
+  --ring: #c4513a;
+  --button-bg-disabled: #e4dfda;
 
-  /* ---------- Sidebar ---------- */
-  --sidebar: #fbf6ec;
-  --sidebar-primary: #3b82f6;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #fff3e0;
-  --sidebar-accent-foreground: #8a4a18;
-  --sidebar-border: #ece4d2;
-  --sidebar-ring: #3b82f6;
-  --sidebar-button-hover: #f3ecdc;
-  --sidebar-weak: #b8a988;
+  /* ---------- Sidebar (dark) ---------- */
+  --sidebar: #302c2a;
+  --sidebar-fg: #f2eeea;
+  --sidebar-muted: #9e9791;
+  --sidebar-hover: #3d3835;
+  --sidebar-active: #4d3f38;
+  --sidebar-primary: #c4513a;
+  --sidebar-primary-foreground: #fcfcfc;
+  --sidebar-accent: #4d3f38;
+  --sidebar-accent-foreground: #f2eeea;
+  --sidebar-border: #292524;
+  --sidebar-ring: #c4513a;
+  --sidebar-button-hover: #3d3835;
+  --sidebar-weak: #9e9791;
+
+  /* ---------- Message ---------- */
+  --user-bg: #c4513a;
+  --user-fg: #fcfcfc;
+  --think-bg: #eff2f6;
+  --think-accent: #5e7ea6;
+  --think-border: #d4dce6;
+  --think-content: #5a6370;
+
+  /* ---------- Text ---------- */
+  --fg-muted: #706b66;
+  --fg-subtle: #968f89;
 
   /* ---------- Chart ---------- */
-  --chart-1: #3b82f6; /* 天空蓝 */
-  --chart-2: #f59e0b; /* 落日橙 */
-  --chart-3: #d4a574; /* 沙金 */
-  --chart-4: #2d8659; /* 椰绿 */
-  --chart-5: #9b5de5; /* 晚霞紫 */
+  --chart-1: #c4513a;
+  --chart-2: #f59e0b;
+  --chart-3: #d4a574;
+  --chart-4: #2d8a55;
+  --chart-5: #9b5de5;
 
   /* ---------- Icon & Label ---------- */
-  --icon-dark: #1a2942;
-  --icon-light: #6b7280;
+  --icon-dark: #2a2725;
+  --icon-light: #706b66;
   --icon-text-dark: #4b5563;
   --icon-weak: #9ca3af;
   --icon-g-ten: #d1d5db;
-  --label-text: #1a2942;
-  --label-foreground: #ffffff;
-  --label-sec-foreground: #8a4a18;
-  --title-default: #1a2942;
+  --label-text: #2a2725;
+  --label-foreground: #fcfcfc;
+  --label-sec-foreground: #b3432d;
+  --title-default: #2a2725;
 
   /* ---------- Shadow ---------- */
-  --shadow-subtle: 0 1px 2px 0 rgb(26 41 66 / 0.04);
-  --shadow-card:
-    0 2px 8px -2px rgb(26 41 66 / 0.06), 0 4px 16px -4px rgb(26 41 66 / 0.04);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-subtle: 0 1px 2px 0 rgb(42 39 37 / 0.05);
+  --shadow-card: 0 4px 12px rgba(0, 0, 0, 0.08);
   --shadow-popover:
-    0 8px 24px -4px rgb(26 41 66 / 0.12), 0 2px 6px -2px rgb(26 41 66 / 0.06);
-  --shadow-mist: 0 4px 20px -6px rgb(14 127 191 / 0.18);
+    0 8px 24px -4px rgb(42 39 37 / 0.12), 0 2px 6px -2px rgb(42 39 37 / 0.06);
+  --shadow-mist: 0 4px 20px -6px rgb(196 81 58 / 0.18);
 
   /* ---------- Motion ---------- */
   --transition-fast: 150ms ease-in-out;
@@ -86,18 +108,12 @@
 
   /* ---------- Typography ---------- */
   --font-sans:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-    "Microsoft YaHei", Roboto, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", "Menlo", ui-monospace, monospace;
 }
 
-/* TODO: v0.4 极光风暗色主题，仅替换 token 值，不改命名
-.dark {
-  --background: #020202;
-  --foreground: #fafafa;
-  ...
-}
-*/
+/* TODO: v0.4 暗色主题，仅替换 token 值，不改命名 */
 
 /**
  * @theme inline 桥接：把 :root CSS 变量暴露给 Tailwind v4，
@@ -107,6 +123,7 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-surface: var(--surface);
+  --color-surface-alt: var(--surface-alt);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
   --color-popover: var(--popover);
@@ -123,20 +140,40 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-hover: var(--accent-hover);
+  --color-success: var(--success);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
 
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
   --color-input: var(--input);
   --color-ring: var(--ring);
 
   --color-sidebar: var(--sidebar);
+  --color-sidebar-fg: var(--sidebar-fg);
+  --color-sidebar-muted: var(--sidebar-muted);
+  --color-sidebar-hover: var(--sidebar-hover);
+  --color-sidebar-active: var(--sidebar-active);
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-button-hover: var(--sidebar-button-hover);
+  --color-sidebar-weak: var(--sidebar-weak);
+
+  --color-user-bg: var(--user-bg);
+  --color-user-fg: var(--user-fg);
+  --color-think-bg: var(--think-bg);
+  --color-think-accent: var(--think-accent);
+  --color-think-border: var(--think-border);
+  --color-think-content: var(--think-content);
+
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
 
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
@@ -144,7 +181,6 @@
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
 
-  /* Icon / Label / Title 工具类 */
   --color-icon-dark: var(--icon-dark);
   --color-icon-light: var(--icon-light);
   --color-icon-text-dark: var(--icon-text-dark);
@@ -153,9 +189,8 @@
   --color-label-foreground: var(--label-foreground);
   --color-label-sec-foreground: var(--label-sec-foreground);
   --color-title-default: var(--title-default);
-  --color-sidebar-weak: var(--sidebar-weak);
-  --color-sidebar-button-hover: var(--sidebar-button-hover);
 
+  --shadow-sm: var(--shadow-sm);
   --shadow-subtle: var(--shadow-subtle);
   --shadow-card: var(--shadow-card);
   --shadow-popover: var(--shadow-popover);
@@ -164,8 +199,8 @@
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
 
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
   --radius-xl: 18px;
 }
