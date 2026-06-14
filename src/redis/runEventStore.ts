@@ -1,5 +1,5 @@
 /**
- * Task 5.4 — Redis 事件存储层(agent_run_events 高频写 + 跨进程广播预留)
+ * Task 5.4 — Redis 事件存储层(事件流高频写 + 跨进程广播预留)
  *
  * 规划:docs/开发规划.md Task 5.4
  * 八股:docs/01-面试八股文/05-记忆系统.md §短期记忆事件流(episodic memory)

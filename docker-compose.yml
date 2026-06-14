@@ -16,7 +16,7 @@ services:
       retries: 30
       start_period: 20s
 
-  # Task 5.4 — Redis 热层：承担 agent_run_events 高频 append + Pub/Sub 跨进程广播预留
+  # Task 5.4 — Redis 热层：承担事件流高频 append + Pub/Sub 跨进程广播预留
   # 端口映射 6380:6379，避开本机已有 Redis(6379)冲突
   # AOF everysec：宕机最多丢 1 秒事件，业务可接受(用户重发即可)
   redis:

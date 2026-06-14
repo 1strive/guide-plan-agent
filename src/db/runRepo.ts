@@ -1,14 +1,16 @@
 /**
- * Task 整合-2 — agent_runs / agent_run_events 仓库层
+ * Task 整合-2 + Task 5.4 — agent_runs / archived_run_events 仓库层
  *
- * 规划:docs/开发规划.md 整合阶段 Task 整合-2
+ * 规划:docs/开发规划.md 整合阶段 Task 整合-2 + Task 5.4 Redis 热层改造
  * 八股:05-记忆系统.md §短期记忆(事件流水 = episodic memory 的工程形态)
  *       08-工程化实践.md §3 全链路可观测(事件日志即审计源)
  *
  * 设计要点:
+ * - agent_runs:完整状态机 CRUD + 启动清理
+ * - archived_run_events:冷库读写(Run 终态归档 + 续订回放)
+ * - agent_run_events 旧表已从 003 migration 中移除(功能由 Redis Stream + archived_run_events 替代)
  * - seq 分配走 runManager 内存 counter(同一 Run 串行 yield 事件,无并发问题)
  * - markAllRunningAsFailed:启动时清理上次进程残留的 running 状态
- * - 续订查询 queryEventsAfter 用 (run_id, seq) 主键,O(log n) + 顺序扫
  */
 
 import type { RowDataPacket, ResultSetHeader } from 'mysql2'
@@ -130,13 +132,7 @@ export async function markAllRunningAsFailed(pool: DbPool): Promise<number> {
   return res.affectedRows
 }
 
-// ─── agent_run_events ────────────────────────────────────────────
-
-// agent_run_events 表(Task 5.4 已冻结):
-//   原高频 appendEvent / queryEventsAfter 已迁至 src/redis/runEventStore.ts(Redis Stream)
-//   旧表保留仅供历史回溯；Run 终态时归档到 archived_run_events 冷库表。
-
-// ─── archived_run_events(Task 5.4 冷库)───────────────────────
+// ─── archived_run_events（Task 5.4 冷库）─────────────────────────
 
 /**
  * Task 5.4 — 冷库批量写入(archiveAndCleanup 调用)
@@ -163,7 +159,6 @@ export async function bulkInsertArchivedEvents(
 
 /**
  * Task 5.4 — 续订冷库查询(Redis Stream 已过期后走此路)
- * 表结构与原 agent_run_events 一致，调用方返回型不变
  */
 export async function queryArchivedEventsAfter(
   pool: DbPool,

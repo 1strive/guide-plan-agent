@@ -8,7 +8,7 @@
 >
 > **重大决策(2026-06-01)**:**原阶段3 RAG 主体已废弃** —— 完整实现过(Task 3.1~3.6:chunker / Embedder × 4 / Chroma / RRF + lexical rerank / Xenova ONNX),实测后判定不适合旅游场景的实时性需求,改由阶段4 通过 MCP/Skills 实时调用外部工具(Tavily、高德地图、和风天气等)实现"动态 RAG"。本次提交清空 `src/rag/`、Chroma 容器、chromadb / `@xenova/transformers` 依赖;**Task 3.7 重定位为 Task 4.0**。详见 `docs/开发规划.md` 关键设计决策 #6。
 >
-> **最近更新**:2026-06-15(Task 5.4 Redis 热层落地 — `agent_run_events` 高频写迁移到 Redis Stream `run:{runId}:events`,Run 终态归档到 `archived_run_events` 冷库;Pub/Sub 频道 `run:{runId}:channel` 为跨进程广播预留,本期订阅端仍走内存)。前次更新:2026-06-01 RAG 链路废弃 + Task 3.7 迁阶段4 4.0。再前:Task 整合-2 完整版落地(`src/agent/runManager.ts` 三态 abort + 多订阅者 + `src/db/runRepo.ts` + DB migration 003 + `chat_sessions.status` + 3 个新 HTTP 路由 `/runs/active` / `/runs/:runId/stream?after_seq=N` / `POST /runs/:runId/cancel` + 前端「停止」按钮 + 切走自动续订;Node 20+ 后 polyfill 已删,加 `.nvmrc=22` + `engines.node>=20`)。
+> **最近更新**:2026-06-15(Task 5.4 Redis 热层落地 + `agent_run_events` 旧表正式 DROP — 事件流迁移到 Redis Stream `run:{runId}:events`,Run 终态归档到 `archived_run_events` 冷库;Pub/Sub 频道 `run:{runId}:channel` 为跨进程广播预留,本期订阅端仍走内存)。前次更新:2026-06-01 RAG 链路废弃 + Task 3.7 迁阶段4 4.0。再前:Task 整合-2 完整版落地(`src/agent/runManager.ts` 三态 abort + 多订阅者 + `src/db/runRepo.ts` + DB migration 003 + `chat_sessions.status` + 3 个新 HTTP 路由 `/runs/active` / `/runs/:runId/stream?after_seq=N` / `POST /runs/:runId/cancel` + 前端「停止」按钮 + 切走自动续订;Node 20+ 后 polyfill 已删,加 `.nvmrc=22` + `engines.node>=20`)。
 
 ---
 
@@ -76,10 +76,9 @@
           │  XADD/XRANGE 事件流  │   │   agent_runs (状态机)            │
           │  PUBLISH/SUBSCRIBE   │   │   archived_run_events (冷库,    │
           │  键: run:{id}:events │   │     Run 终态归档)                │
-          │  频道: run:{id}:chan │   │   agent_run_events (旧,停写)     │
-          │  归档后 EXPIRE 1h    │   │   web_search_cache (Task 4.0)    │
-          └──────────────────────┘   │   destinations / *_features      │
-                                     └──────────────────────────────────┘
+          │  频道: run:{id}:chan │   │   web_search_cache (Task 4.0)    │
+          │  归档后 EXPIRE 1h    │   │   destinations / *_features      │
+          └──────────────────────┘   └──────────────────────────────────┘
 ```
 
 ### 1.2 模块职责表
@@ -88,7 +87,7 @@
 | -------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
 | HTTP 层                                | `src/index.ts`                                     | 路由、SSE 生命周期、abort 钩子、日志 trace_id、token 持久化                                                                                                                                                                                                                                           | 不写 LLM 调用细节、不解析 SSE 协议                        |
 | Prompts                                | `src/agent/prompts/`                               | section 化模板、版本注册、渲染插值、Few-shot prepend                                                                                                                                                                                                                                                  | 不知道 LLM 怎么调、不接 DB                                |
-| **Run 管理器**(Task 整合-2 + Task 5.4) | `src/agent/runManager.ts`                          | 进程内 Run 注册表 + 三态 abort(per-subscriber vs per-run)+ 状态机推进 + 事件 pump(**Task 5.4:写 Redis Stream 替代 agent_run_events,终态调 archiveAndCleanup 归档冷库;启动扫 Redis 残留 stream 兜底归档**)、广播 subscriber、增量写 chat_messages)                                                     | 不直接接 HTTP / LangGraph;只通过 langgraph-agent 拿事件流 |
+| **Run 管理器**(Task 整合-2 + Task 5.4) | `src/agent/runManager.ts`                          | 进程内 Run 注册表 + 三态 abort(per-subscriber vs per-run)+ 状态机推进 + 事件 pump(**Task 5.4:写 Redis Stream,终态调 archiveAndCleanup 归档冷库;启动扫 Redis 残留 stream 兜底归档**)、广播 subscriber、增量写 chat_messages)                                                                           | 不直接接 HTTP / LangGraph;只通过 langgraph-agent 拿事件流 |
 | **Redis 热层**(Task 5.4)               | `src/redis/pool.ts` / `src/redis/runEventStore.ts` | ioredis 单例 + 事件流封装(`appendEvent` XADD `{seq}-0` + PUBLISH;`queryEventsAfter` XRANGE 续订;`streamExists` 双源判断;`archiveAndCleanup` XRANGE 全段→批量 INSERT IGNORE archived_run_events→EXPIRE TTL;`listOrphanRuns` SCAN 兜底)。XADD 显式 seq ID 让 Redis 拒乱序写,等价 MySQL PRIMARY KEY 保护 | 不知道业务语义;不写 chat_messages / agent_runs 状态机     |
 | **Agent 主线**(Task 整合-1)            | `src/agent/langgraph-agent.ts`                     | `runLangGraphAgent`:`langchain.createAgent` + `MemorySaver` + 工具 wrap;**被 runManager 调用**;`buildChatModel` 导出供 planner 复用                                                                                                                                                                   | 不写 DB、不直接接 HTTP                                    |
 | **Plan-and-Execute Agent**(Task 4.2)   | `src/agent/planner.ts`                             | `runPlannerAgent`:跟 `runLangGraphAgent` 同签名;三阶段(PLAN LLM → 顺序 runTool → SYNTH LLM);Plan JSON 走 zod 严格校验 + 重试 1 次;**复用 thinkSplit** 处理 `<think>`;runManager 按 mode dispatch                                                                                                      | 不写 DB、不直接接 HTTP;不支持步骤间参数引用(简化版)       |
@@ -584,7 +583,7 @@ OpenAI 兼容协议默认**流式响应不返回 usage**。不声明就拿不到
 
 **未来升级方向**:严重等级 = `high` 且来自非可信用户(阶段5 加身份层后)时硬拒绝,low/medium 仍走"包裹 + 让模型判"路径。
 
-### 5.7 为什么 Run-as-Resource 完整版用"自研 RunManager + agent_run_events 表"而不是直接用 LangGraph Checkpointer(Task 整合-2)★
+### 5.7 为什么 Run-as-Resource 完整版用“自研 RunManager + Redis Stream + archived_run_events”而不是直接用 LangGraph Checkpointer(Task 整合-2)★
 
 LangGraph 的 `MemorySaver` / `SqliteSaver` 是**框架自身的 thread 状态持久化**——给"interrupt + Command(resume)"用的,让 LangGraph 自己知道上次跑到哪。
 
@@ -596,7 +595,7 @@ LangGraph 的 `MemorySaver` / `SqliteSaver` 是**框架自身的 thread 状态�
 所以做了职责分离:
 
 - **LangGraph Checkpointer**(进程内 `MemorySaver`)管 LangGraph 自己的 thread state
-- **`agent_run_events` 表**存我们项目业务的 AG-UI 事件流,seq 单调递增,**前端续订的 `?after_seq=N` 直接 SQL 查**
+- **Redis Stream + `archived_run_events` 表**存我们项目业务的 AG-UI 事件流,seq 单调递增,**前端续订的 `?after_seq=N` 走 XRANGE / SQL 查**
 - **`runManager` 在内存中持有 RunHandle**,绑定 LangGraph stream + 订阅者集合 + per-run AbortController;客户端断开仅 unsubscribe,Run 在 manager 内继续跑
 
 **为什么 Checkpointer 不升级到 SqliteSaver**:进程重启后 LangGraph 自己能恢复 thread state 没问题,但"重新挂上 stream + 重建 subscriber + 重新 pump"这套需要重写大量代码,**收益不匹配学习项目复杂度**——所以选简单方案:重启时把 running 全标 failed,前端续订拿到 active=null 显示"已中断"。
@@ -646,11 +645,11 @@ LangGraph 的 `MemorySaver` / `SqliteSaver` 是**框架自身的 thread 状态�
 
 ### 5.10 为什么 Redis 只承担事件流热层(Task 5.4)★
 
-**背景**:原本 `agent_run_events` 以 MySQL JSON 行形式高频 INSERT(每个 token / tool 事件一行),同一 Run 几百行很常见;阅读生命期均 < 1h(前端续订完就不再查)——冷数据占据高频表是典型反模式。
+**背景**:原 `agent_run_events`（已 DROP）以 MySQL JSON 行形式高频 INSERT(每个 token / tool 事件一行),同一 Run 几百行很常见;阅读生命期均 < 1h(前端续订完就不再查)——冷数据占据高频表是典型反模式。
 
 **决策范围**(渐进型,只迁事件流):
 
-- **迁**:`agent_run_events` 写入 + 续订 → Redis Stream `run:{runId}:events`(XADD `{seq}-0` 显式 ID)
+- **迁**:事件流写入 + 续订 → Redis Stream `run:{runId}:events`（XADD `{seq}-0` 显式 ID）；旧 `agent_run_events` 已从 003 migration 中移除
 - **不迁**:`agent_runs` 状态机 + `chat_sessions` / `chat_messages` 业务表 — 继续 MySQL(FK CASCADE 全部保留)
 - **热冷分层**:Run 终态时全段 XRANGE 走 INSERT IGNORE 进 `archived_run_events` 冷库,Redis 则 EXPIRE 1h 给续订缓冲(不 DEL,避免刚归档完前端续订拿不到)
 - **Pub/Sub 预留**:频道 `run:{runId}:channel` 已 PUBLISH,本期订阅端仍用内存 Map(多副本部署后 Task 补跨进程订阅端即可)
@@ -718,7 +717,7 @@ LangGraph 的 `MemorySaver` / `SqliteSaver` 是**框架自身的 thread 状态�
 | 改 runManager.ts / runRepo.ts(整合-2 核心)            | §1.2 模块表 Run 管理器 / Run 仓库 + §5.7 Run-as-Resource 决策 + §6 局限表续订 / cancel 条目 |
 | 改 redis/pool.ts / redis/runEventStore.ts(Task 5.4)   | §1.1 分层图 + §1.2 Redis 热层行 + §5.10 决策 + `note-06-redis-hot-layer.md`                 |
 | 改 archived_run_events schema                         | DB migration 006 + §1.2 + §5.10 不变量                                                      |
-| 改 agent_runs / agent_run_events schema               | DB migration 003 + §1.2 + §6                                                                |
+| 改 agent_runs / archived_run_events schema            | DB migration 003/006 + §1.2 + §6                                                            |
 | 加 / 改 /runs/\* HTTP 路由                            | §2 API 一览                                                                                 |
 | 改 ag-ui.ts 的 Source 类型(union 分支)                | §1.2 AG-UI 协议行 + §4.4 sources 路径                                                       |
 

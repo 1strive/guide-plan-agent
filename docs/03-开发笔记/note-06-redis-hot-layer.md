@@ -1,6 +1,6 @@
 # Redis 热层改造笔记(Task 5.4)
 
-> **任务范围**:把 `agent_run_events` 高频写入 + 续订查询从 MySQL 迁移到 Redis Stream;Run 终态时全段归档到 `archived_run_events` 冷库;Pub/Sub 频道为跨进程广播预留(本期订阅端不接)。
+> **任务范围**：把事件流高频写入 + 续订查询从 MySQL 迁移到 Redis Stream；Run 终态时全段归档到 `archived_run_events` 冷库；Pub/Sub 频道为跨进程广播预留(本期订阅端不接)。旧 `agent_run_events` 表已从 003 migration 中移除(不再建表)。
 >
 > **方案**:渐进型方案 B —— 状态机 / 业务表继续 MySQL,只迁事件流。
 >
@@ -10,7 +10,7 @@
 
 ## 1. 为什么这么做(STAR)
 
-- **S(背景)**:阅读 `agent_run_events` 在 MySQL,每个 token 一行 INSERT,流式响应几百行很常见;阅读生命期 < 1h(前端续订完就不再查)。
+- **S(背景)**：事件流原在 MySQL `agent_run_events` 表,每个 token 一行 INSERT,流式响应几百行很常见;阅读生命期 < 1h(前端续订完就不再查)。
 - **T(目标)**:把高频写从 MySQL 卸下来,降低主库压力;同时不破坏 `?after_seq=N` 续订接口的 seq 语义。
 - **A(动作)**:
   1. 抽 `src/redis/runEventStore.ts` 5 个函数(`appendEvent` / `queryEventsAfter` / `streamExists` / `archiveAndCleanup` / `listOrphanRuns`)封装 Stream + Pub/Sub
@@ -104,7 +104,7 @@ if (await streamExists(redis, runId)) {
 
 - **跨进程订阅本期不接**:Pub/Sub PUBLISH 已到位,subscribe 端待补
 - **归档原子性**:`XRANGE → INSERT → EXPIRE` 非事务,失败保留 Stream 由 `cleanupOnStartup` 重试,INSERT IGNORE 保证幂等
-- **agent_run_events 旧表保留**:不删,旧数据可回溯;新数据不再写入
+- **agent_run_events 旧表已移除**：已从 003 migration 中删除建表语句，新数据全走 Redis Stream + archived_run_events
 - **Redis 单点 + AOF everysec**:宕机最多丢 1s 事件;高可用留给生产化阶段
 
 ---

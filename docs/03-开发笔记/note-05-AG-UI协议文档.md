@@ -470,7 +470,7 @@ RUN_STARTED
 1. GET /sessions/:id/messages → { status: 'running' } ?
 2. 是 → GET /sessions/:id/runs/active → { active: { runId, lastEventSeq } }
 3. 连 GET /sessions/:id/runs/:runId/stream?after_seq=0
-4. 服务端先回放所有历史事件(从 DB 读 agent_run_events)
+4. 服务端先回放所有历史事件(从 Redis Stream 或 archived_run_events 冷库读)
 5. 若 Run 仍活跃 → 接实时流;若已结束 → 回放完直接关流
 6. 前端用跟 consumeStream 完全相同的事件循环处理(无需区分首次 vs 续订)
 ```

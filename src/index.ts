@@ -64,7 +64,7 @@ async function main() {
   }
 
   // Task 整合-2:进程内 Run 注册表;cleanupOnStartup 清理上次残留的 running 状态
-  // Task 5.4:注入 redis,RunManager 内部走 Redis Stream 替代 agent_run_events 高频写
+  // Task 5.4:注入 redis,RunManager 内部走 Redis Stream 事件流热层
   const runManager = new RunManager(pool, redis, config, app.log, mcpManager, recordRunMetrics)
   await runManager.cleanupOnStartup()
 
@@ -146,7 +146,7 @@ async function main() {
 
   /**
    * 八股:05-记忆系统.md §3.2.2 CRUD「删」
-   * - 用户可控的会话级硬删除;messages / agent_runs / agent_run_events 由 FK CASCADE 级联清理
+   * - 用户可控的会话级硬删除;messages / agent_runs / archived_run_events 由 FK CASCADE 级联清理
    * - 整合-2:若会话有活跃 Run 应先 cancel(避免内存里 RunHandle 引用已删 session)
    */
   app.delete<{ Params: { id: string } }>(

@@ -16,7 +16,7 @@
 -- - 表结构与原 agent_run_events 完全一致(seq + event_json),续订游标语义零变更
 -- - 主键 (run_id, seq):INSERT IGNORE 重复归档幂等;续订查询走 PK 顺序扫
 -- - FK CASCADE:删 session → 删 agent_runs → 删 archived_run_events,链路完整
--- - 旧 agent_run_events 表保留(停止写入),旧数据保留以便回溯,后续 Task 决定是否清理
+-- - 旧 agent_run_events 已从 003 migration 中移除(不再建表),本表正式接替其冷库职责
 
 CREATE TABLE IF NOT EXISTS archived_run_events (
     run_id CHAR(36) NOT NULL,

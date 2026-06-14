@@ -12,9 +12,9 @@
 
 ## 总览
 
-| Task | 一句话 | 新增文件 | 改动文件 |
-|------|--------|----------|---------|
-| **整合-1** | 用 `createAgent` 替换手写 ReAct 主循环，保持 AG-UI 事件协议不变 | `src/agent/langgraph-agent.ts` `src/agent/langgraphToAgUi.ts` | `src/index.ts` `src/agent/llm.ts`（瘦身） `package.json` |
+| Task       | 一句话                                                                              | 新增文件                                                                                    | 改动文件                                                                                              |
+| ---------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| **整合-1** | 用 `createAgent` 替换手写 ReAct 主循环，保持 AG-UI 事件协议不变                     | `src/agent/langgraph-agent.ts` `src/agent/langgraphToAgUi.ts`                               | `src/index.ts` `src/agent/llm.ts`（瘦身） `package.json`                                              |
 | **整合-2** | Run-as-Resource 完整版：进程内注册表 + 事件 seq 回放 + 三态 abort + 多订阅者 + 续订 | `src/agent/runManager.ts` `src/db/runRepo.ts` `src/db/migrations/003_agent_runs_events.sql` | `src/index.ts` `src/db/chatRepo.ts` `web/src/App.tsx` `web/src/api.ts` `src/agent/langgraphToAgUi.ts` |
 
 整合阶段的核心决策：**LangGraph 先于 Task 4.x 上主线**——因为 `thread_id` + `Checkpointer` 让续流实现成本远低于手写。这是真实工程常见决策："发现接框架只要 2 天，手写要 2 周，就该接框架。"
@@ -71,24 +71,24 @@ LangGraph `streamEvents v2` → AG-UI 事件翻译器。**这是整合-1 最核�
 
 **事件映射表**（`langgraphToAgUi.ts:7-18` 头注释）：
 
-| LangGraph 事件 | AG-UI 事件 |
-|---------------|-----------|
-| `on_chat_model_start` | `STEP_STARTED('generating')` |
-| `on_chat_model_stream` | `TEXT_MESSAGE_START/CONTENT/END` |
-| `on_chat_model_end` | usage 累加（`onUsage` 回调） |
-| `on_tool_start` | `STEP_STARTED('tool_call')` + `TOOL_CALL_START/ARGS/END` |
-| `on_tool_end` | `STEP_FINISHED('tool_call')` + `TOOL_CALL_RESULT` |
-| 流自然结束 | 检测 `[ASK_USER]` → `RUN_FINISHED` |
-| 流抛错 | `RUN_ERROR` + `RUN_FINISHED` |
+| LangGraph 事件         | AG-UI 事件                                               |
+| ---------------------- | -------------------------------------------------------- |
+| `on_chat_model_start`  | `STEP_STARTED('generating')`                             |
+| `on_chat_model_stream` | `TEXT_MESSAGE_START/CONTENT/END`                         |
+| `on_chat_model_end`    | usage 累加（`onUsage` 回调）                             |
+| `on_tool_start`        | `STEP_STARTED('tool_call')` + `TOOL_CALL_START/ARGS/END` |
+| `on_tool_end`          | `STEP_FINISHED('tool_call')` + `TOOL_CALL_RESULT`        |
+| 流自然结束             | 检测 `[ASK_USER]` → `RUN_FINISHED`                       |
+| 流抛错                 | `RUN_ERROR` + `RUN_FINISHED`                             |
 
 **状态机变量**（`langgraphToAgUi.ts:118-132`）：
 
 ```ts
-let textStarted = false      // 正在输出 text
-let thinkingStarted = false  // 正在输出 thinking
-let inGeneratingStep = false // 在 generating step 内
-let inToolStep = false       // 在 tool_call step 内
-let round = 0                // LLM 调用轮次
+let textStarted = false; // 正在输出 text
+let thinkingStarted = false; // 正在输出 thinking
+let inGeneratingStep = false; // 在 generating step 内
+let inToolStep = false; // 在 tool_call step 内
+let round = 0; // LLM 调用轮次
 ```
 
 **usage 提取**（`langgraphToAgUi.ts:240-264`）：LangChain 把 usage 放在 `output.usage_metadata`（新格式 `input_tokens/output_tokens`）或 `output.response_metadata.usage`（旧格式 `prompt_tokens/completion_tokens`），adapter 两种都兼容。
@@ -105,14 +105,14 @@ let round = 0                // LLM 调用轮次
 
 ### 关键决策
 
-| 决策 | 理由 |
-|------|------|
-| ✅ 主线切换，不保留双 backend | 整合-2 需要 `thread_id + Checkpointer`，手写做不到 |
-| ✅ 保留 AG-UI 协议 | adapter 层吸收差异，前端 / 评测脚本 0 改动 |
-| ✅ 删除手写代码 | STAR 故事写笔记而非靠死代码留档 |
-| ✅ `MemorySaver` 起步 | 最简单实现先跑通，整合-2 不再升级（进程内够用） |
-| ❌ 不引入 LangChain 全家桶 | 只装 `langchain` + `@langchain/core` + `@langchain/langgraph` + `@langchain/openai` |
-| ❌ 不用 LangGraph 原生 `interrupt()` | `[ASK_USER]` 字符串协议先保留 |
+| 决策                                 | 理由                                                                                |
+| ------------------------------------ | ----------------------------------------------------------------------------------- |
+| ✅ 主线切换，不保留双 backend        | 整合-2 需要 `thread_id + Checkpointer`，手写做不到                                  |
+| ✅ 保留 AG-UI 协议                   | adapter 层吸收差异，前端 / 评测脚本 0 改动                                          |
+| ✅ 删除手写代码                      | STAR 故事写笔记而非靠死代码留档                                                     |
+| ✅ `MemorySaver` 起步                | 最简单实现先跑通，整合-2 不再升级（进程内够用）                                     |
+| ❌ 不引入 LangChain 全家桶           | 只装 `langchain` + `@langchain/core` + `@langchain/langgraph` + `@langchain/openai` |
+| ❌ 不用 LangGraph 原生 `interrupt()` | `[ASK_USER]` 字符串协议先保留                                                       |
 
 ---
 
@@ -121,7 +121,7 @@ let round = 0                // LLM 调用轮次
 ### 关联八股
 
 - `08-工程化实践.md §1` 容错（**首次实践**：细粒度 abort 三态模型 — per-subscriber vs per-run 互不级联）
-- `08-工程化实践.md §3` 全链路可观测（事件日志即审计源，`agent_run_events` 表 = 事件流水）
+- `08-工程化实践.md §3` 全链路可观测（事件日志即审计源，现走 Redis Stream + `archived_run_events` 冷库）
 - `05-记忆系统.md §短期记忆`（事件流水 = episodic memory 的工程形态）
 - `02-核心框架.md` Run-as-Resource 模型（"HTTP 请求 ≠ Agent Run"解耦原则）
 
@@ -156,26 +156,27 @@ ALTER TABLE chat_sessions ADD COLUMN status ENUM('running','end') DEFAULT 'end';
 ```
 
 **关键设计**：
+
 - `last_event_seq` 冗余在 `agent_runs` 上，供 `/runs/active` 续订时秒查（避免 COUNT on events）
 - `agent_run_events` 的 `(run_id, seq)` 主键保证续订查询 `seq > N` 走 O(log n) 索引扫描
 - FK `ON DELETE CASCADE` 让删除会话时级联清理 runs + events
 
 ### 新增 `src/db/runRepo.ts`（178 行）
 
-`agent_runs` / `agent_run_events` 的 CRUD + 启动清理。
+`agent_runs` / `archived_run_events` 的 CRUD + 启动清理。（原 `agent_run_events` 表已 DROP，功能由 Redis Stream + archived_run_events 替代）
 
 **核心函数**：
 
-| 函数 | 位置 | 用途 |
-|------|------|------|
-| `createRun` | `runRepo.ts:44` | INSERT agent_runs |
-| `updateRunStatus` | `runRepo.ts:56` | 状态机推进 + 可选 set finished_at |
-| `incrementRunTokens` | `runRepo.ts:72` | Run 结束时累加 total_tokens |
-| `getRunById` | `runRepo.ts:84` | 单 Run 查询（cancel / stream 路由用） |
-| `getActiveRunBySession` | `runRepo.ts:102` | 查会话最近未完成 Run（GET /runs/active） |
-| `markAllRunningAsFailed` | `runRepo.ts:124` | **启动清理**：把残留 running 全标 failed |
-| `appendEvent` | `runRepo.ts:139` | 追加事件 + 同步 `last_event_seq`（用 `GREATEST` 防乱序回退） |
-| `queryEventsAfter` | `runRepo.ts:159` | 续订查询：`seq > afterSeq ORDER BY seq ASC` |
+| 函数                     | 位置             | 用途                                                         |
+| ------------------------ | ---------------- | ------------------------------------------------------------ |
+| `createRun`              | `runRepo.ts:44`  | INSERT agent_runs                                            |
+| `updateRunStatus`        | `runRepo.ts:56`  | 状态机推进 + 可选 set finished_at                            |
+| `incrementRunTokens`     | `runRepo.ts:72`  | Run 结束时累加 total_tokens                                  |
+| `getRunById`             | `runRepo.ts:84`  | 单 Run 查询（cancel / stream 路由用）                        |
+| `getActiveRunBySession`  | `runRepo.ts:102` | 查会话最近未完成 Run（GET /runs/active）                     |
+| `markAllRunningAsFailed` | `runRepo.ts:124` | **启动清理**：把残留 running 全标 failed                     |
+| `appendEvent`            | `runRepo.ts:139` | 追加事件 + 同步 `last_event_seq`（用 `GREATEST` 防乱序回退） |
+| `queryEventsAfter`       | `runRepo.ts:159` | 续订查询：`seq > afterSeq ORDER BY seq ASC`                  |
 
 ### 新增 `src/agent/runManager.ts`（421 行）
 
@@ -185,20 +186,20 @@ ALTER TABLE chat_sessions ADD COLUMN status ENUM('running','end') DEFAULT 'end';
 
 ```ts
 type RunHandle = {
-  runId: string
-  sessionId: string
-  status: AgentRunStatus              // 状态机：pending → running → {completed|interrupted|cancelling→cancelled|failed}
-  seqCounter: number                  // 内存 seq 递增（串行 yield，无并发问题）
-  subscribers: Map<string, Subscriber> // 多订阅者
-  abortController: AbortController    // per-run Controller（cancel / SIGTERM / 超时触发）
-  currentAssistantMessageId: number | null  // 流式 assistant 消息 stub 的 DB id
-  currentAssistantContent: string     // 内存累加，TEXT_MESSAGE_END 时 flush
-  totalTokensDelta: number
-  log: FastifyBaseLogger              // child logger 已绑 { runId, mode }
-  startedAt: number
-  toolStats: { count: number; names: string[] }
-  mode: RunMode
-}
+  runId: string;
+  sessionId: string;
+  status: AgentRunStatus; // 状态机：pending → running → {completed|interrupted|cancelling→cancelled|failed}
+  seqCounter: number; // 内存 seq 递增（串行 yield，无并发问题）
+  subscribers: Map<string, Subscriber>; // 多订阅者
+  abortController: AbortController; // per-run Controller（cancel / SIGTERM / 超时触发）
+  currentAssistantMessageId: number | null; // 流式 assistant 消息 stub 的 DB id
+  currentAssistantContent: string; // 内存累加，TEXT_MESSAGE_END 时 flush
+  totalTokensDelta: number;
+  log: FastifyBaseLogger; // child logger 已绑 { runId, mode }
+  startedAt: number;
+  toolStats: { count: number; names: string[] };
+  mode: RunMode;
+};
 ```
 
 **核心方法**：
@@ -237,7 +238,7 @@ handle.status = 'cancelling' → updateRunStatus(DB) → handle.abortController.
 
 ```ts
 for await (const event of generator) {
-  await handleEvent(handle, event)  // 写 DB + 持久化 assistant + 广播 subscribers
+  await handleEvent(handle, event); // 写 DB + 持久化 assistant + 广播 subscribers
 }
 // catch: cancelling 中收 abort → cancelled；否则 failed
 // finally: finalize(handle, status)
@@ -246,6 +247,7 @@ for await (const event of generator) {
 #### `handleEvent()`（`runManager.ts:293-321`）
 
 每个事件的处理：
+
 1. `appendEvent` 写 `agent_run_events`（顺序保证）
 2. `persistAssistantMessage`：首次 `TEXT_MESSAGE_CONTENT` 时 INSERT stub，`TEXT_MESSAGE_END` 时 UPDATE 整条 content
 3. 累加 `toolStats`（给 finalize 的 run summary 用）
@@ -262,13 +264,13 @@ flush 遗留 assistant content → updateRunStatus(DB, status, finished_at)
 
 ### 改 `src/db/chatRepo.ts`：新增 4 个函数
 
-| 函数 | 位置 | 用途 |
-|------|------|------|
-| `updateSessionStatus` | `chatRepo.ts:115` | 更新 `chat_sessions.status`（'running' / 'end'） |
-| `getSessionStatus` | `chatRepo.ts:123` | GET /messages 返回 status 字段 |
-| `markAllSessionsAsEnd` | `chatRepo.ts:138` | 启动清理：配对 `markAllRunningAsFailed` |
-| `insertAssistantStub` | `chatRepo.ts:153` | 流式中 INSERT 空 content 占位行，返回 id |
-| `updateAssistantContent` | `chatRepo.ts:161` | TEXT_MESSAGE_END 时 UPDATE 整条 content |
+| 函数                     | 位置              | 用途                                             |
+| ------------------------ | ----------------- | ------------------------------------------------ |
+| `updateSessionStatus`    | `chatRepo.ts:115` | 更新 `chat_sessions.status`（'running' / 'end'） |
+| `getSessionStatus`       | `chatRepo.ts:123` | GET /messages 返回 status 字段                   |
+| `markAllSessionsAsEnd`   | `chatRepo.ts:138` | 启动清理：配对 `markAllRunningAsFailed`          |
+| `insertAssistantStub`    | `chatRepo.ts:153` | 流式中 INSERT 空 content 占位行，返回 id         |
+| `updateAssistantContent` | `chatRepo.ts:161` | TEXT_MESSAGE_END 时 UPDATE 整条 content          |
 
 **设计要点**：assistant 消息用"INSERT stub + 增量 UPDATE"模式，避免每 token 一条 INSERT 行数爆炸。
 
@@ -276,10 +278,10 @@ flush 遗留 assistant content → updateRunStatus(DB, status, finished_at)
 
 **新增 3 个路由**：
 
-| 路由 | 位置 | 用途 |
-|------|------|------|
-| `GET /sessions/:id/runs/active` | `index.ts:123` | 前端打开会话时查最近未完成 Run |
-| `POST /sessions/:id/runs/:runId/cancel` | `index.ts:140` | 用户主动停止 Run（202 + 幂等） |
+| 路由                                               | 位置           | 用途                             |
+| -------------------------------------------------- | -------------- | -------------------------------- |
+| `GET /sessions/:id/runs/active`                    | `index.ts:123` | 前端打开会话时查最近未完成 Run   |
+| `POST /sessions/:id/runs/:runId/cancel`            | `index.ts:140` | 用户主动停止 Run（202 + 幂等）   |
 | `GET /sessions/:id/runs/:runId/stream?after_seq=N` | `index.ts:159` | 续订：先回放历史事件，再接实时流 |
 
 **改造既有路由**：
@@ -292,24 +294,24 @@ flush 遗留 assistant content → updateRunStatus(DB, status, finished_at)
 
 ```ts
 // 1. 启动 Run（fire-and-forget）
-const runId = await runManager.start(sessionId, msgs, reqLog, mode)
+const runId = await runManager.start(sessionId, msgs, reqLog, mode);
 
 // 2. subscribe：事件转发给当前请求 SSE
-const unsubscribe = await runManager.subscribe(runId, onEvent, onEnd, 0)
+const unsubscribe = await runManager.subscribe(runId, onEvent, onEnd, 0);
 
 // 3. 客户端断开 = 只 unsubscribe，Run 继续跑
-req.raw.once('close', () => {
-  unsubscribe()
-  reqLog.info({ runId }, 'client unsubscribed (run continues in background)')
-})
+req.raw.once("close", () => {
+  unsubscribe();
+  reqLog.info({ runId }, "client unsubscribed (run continues in background)");
+});
 ```
 
 ### 改 `web/src/api.ts`：新增 3 个前端 API 函数
 
-| 函数 | 位置 | 用途 |
-|------|------|------|
-| `getActiveRun` | `api.ts:59` | `GET /runs/active`（供续订判断） |
-| `cancelRun` | `api.ts:66` | `POST /cancel`（主动停止） |
+| 函数              | 位置         | 用途                                            |
+| ----------------- | ------------ | ----------------------------------------------- |
+| `getActiveRun`    | `api.ts:59`  | `GET /runs/active`（供续订判断）                |
+| `cancelRun`       | `api.ts:66`  | `POST /cancel`（主动停止）                      |
 | `resumeRunStream` | `api.ts:134` | `GET /runs/:runId/stream?after_seq=N`（续订流） |
 
 新增类型：`SessionStatus`、`AgentRunRow`。
@@ -320,14 +322,14 @@ req.raw.once('close', () => {
 
 **核心改动**：
 
-| 功能 | 位置 | 说明 |
-|------|------|------|
-| `streamCtrlRef` + `currentRunIdRef` | `App.tsx:38-40` | per-session abort + per-run runId 追踪 |
-| `switchSession()` | `App.tsx:80-123` | status='running' → `getActiveRun` → 启动续订（`startResume`） |
-| `startResume()` | `App.tsx:126-141` | 调 `resumeRunStream(sid, runId, 0)` → 走 `consumeStream` 公共事件循环 |
-| `handleStop()` | `App.tsx:164-174` | 调 `cancelRun` + `abortInFlight` |
-| 停止按钮 | `App.tsx:657-660` | `sending && currentRunIdRef.current` 时显示 |
-| `consumeStream()` | `App.tsx:251-401` | 公共事件循环，被 `handleSend` / `handleOptionClick` / `startResume` 三处复用 |
+| 功能                                | 位置              | 说明                                                                         |
+| ----------------------------------- | ----------------- | ---------------------------------------------------------------------------- |
+| `streamCtrlRef` + `currentRunIdRef` | `App.tsx:38-40`   | per-session abort + per-run runId 追踪                                       |
+| `switchSession()`                   | `App.tsx:80-123`  | status='running' → `getActiveRun` → 启动续订（`startResume`）                |
+| `startResume()`                     | `App.tsx:126-141` | 调 `resumeRunStream(sid, runId, 0)` → 走 `consumeStream` 公共事件循环        |
+| `handleStop()`                      | `App.tsx:164-174` | 调 `cancelRun` + `abortInFlight`                                             |
+| 停止按钮                            | `App.tsx:657-660` | `sending && currentRunIdRef.current` 时显示                                  |
+| `consumeStream()`                   | `App.tsx:251-401` | 公共事件循环，被 `handleSend` / `handleOptionClick` / `startResume` 三处复用 |
 
 **续订流程**：
 
@@ -342,11 +344,11 @@ switchSession(id) → GET /messages（拿 status）
 
 **三态 abort 前端侧**：
 
-| 场景 | 前端行为 | 后端行为 |
-|------|---------|---------|
-| 切换会话 | `streamCtrlRef.abort()`（断开 SSE） | Run 继续跑 + 持续写库 |
-| 主动停止 | `cancelRun` + `abortInFlight` | `runManager.cancel` → abort Run |
-| 关闭标签页 | 浏览器 close → SSE 断开 | Run 继续跑 |
+| 场景       | 前端行为                            | 后端行为                        |
+| ---------- | ----------------------------------- | ------------------------------- |
+| 切换会话   | `streamCtrlRef.abort()`（断开 SSE） | Run 继续跑 + 持续写库           |
+| 主动停止   | `cancelRun` + `abortInFlight`       | `runManager.cancel` → abort Run |
+| 关闭标签页 | 浏览器 close → SSE 断开             | Run 继续跑                      |
 
 ### 改 `src/agent/langgraphToAgUi.ts`：事件持久化
 
@@ -354,35 +356,35 @@ switchSession(id) → GET /messages（拿 status）
 
 ### 关键决策
 
-| 决策 | 理由 |
-|------|------|
-| ✅ 完整三态 abort | per-subscriber 仅 unsubscribe，per-run 才真 abort；两个 Controller 互不级联 |
-| ✅ 事件级 seq 回放 | `(run_id, seq)` 主键，续订 `seq > N` O(log n) 扫描 |
-| ✅ 多订阅者并发 | 同 Run 多 subscriber 共享事件流（多 tab 场景） |
-| ✅ 进程重启标 failed | `markAllRunningAsFailed` + `markAllSessionsAsEnd` 配对调用 |
-| ✅ assistant 消息 stub + 增量 UPDATE | 避免每 token 一行 INSERT |
-| ⚠️ 进程重启不自动续跑 | LangGraph 重建 stream + 复用 checkpoint 复杂度不匹配，推迟 |
-| ❌ Checkpointer 未升级 | 继续 `MemorySaver`（进程内），SqliteSaver/MySQLSaver 推迟 |
-| ❌ 跨进程方案推迟 | Redis Pub/Sub 留给 Task 5.4 容器化 |
+| 决策                                 | 理由                                                                        |
+| ------------------------------------ | --------------------------------------------------------------------------- |
+| ✅ 完整三态 abort                    | per-subscriber 仅 unsubscribe，per-run 才真 abort；两个 Controller 互不级联 |
+| ✅ 事件级 seq 回放                   | `(run_id, seq)` 主键，续订 `seq > N` O(log n) 扫描                          |
+| ✅ 多订阅者并发                      | 同 Run 多 subscriber 共享事件流（多 tab 场景）                              |
+| ✅ 进程重启标 failed                 | `markAllRunningAsFailed` + `markAllSessionsAsEnd` 配对调用                  |
+| ✅ assistant 消息 stub + 增量 UPDATE | 避免每 token 一行 INSERT                                                    |
+| ⚠️ 进程重启不自动续跑                | LangGraph 重建 stream + 复用 checkpoint 复杂度不匹配，推迟                  |
+| ❌ Checkpointer 未升级               | 继续 `MemorySaver`（进程内），SqliteSaver/MySQLSaver 推迟                   |
+| ❌ 跨进程方案推迟                    | Redis Pub/Sub 留给 Task 5.4 容器化                                          |
 
 ---
 
 ## 附录：全部代码改动速查
 
-| 改动类型 | 路径 | Task | 改动一句话 |
-|---------|------|------|------|
-| **新增** | `src/agent/langgraph-agent.ts` | 整合-1 | `createAgent` + 工具 wrap + `buildChatModel`（165 行） |
-| | `src/agent/langgraphToAgUi.ts` | 整合-1 | LangGraph streamEvents v2 → AG-UI 翻译器（352 行） |
-| | `src/agent/runManager.ts` | 整合-2 | 进程内 Run 注册表 + 事件总线 + 三态 abort（421 行） |
-| | `src/db/runRepo.ts` | 整合-2 | agent_runs / agent_run_events CRUD + 启动清理（178 行） |
-| | `src/db/migrations/003_agent_runs_events.sql` | 整合-2 | agent_runs + agent_run_events 表 + chat_sessions.status 字段 |
-| **改代码** | `src/index.ts` | 整合-1 + 整合-2 | handler 从直接调 agent 改为 `runManager.start + subscribe`；新增 3 个 Run 路由 |
-| | `src/agent/llm.ts` | 整合-1 | 删除 `runAgentStream`，瘦身为类型导出（34 行） |
-| | `src/db/chatRepo.ts` | 整合-2 | 新增 `SessionStatus` + 5 个函数（status / stub / flush / 启动清理） |
-| **改前端** | `web/src/api.ts` | 整合-2 | 新增 `getActiveRun` / `cancelRun` / `resumeRunStream` + `parseSseStream` 公共化 |
-| | `web/src/App.tsx` | 整合-2 | 会话续订（`switchSession` → `startResume`）+ 停止按钮 + `consumeStream` 公共化 |
-| **依赖** | `package.json` | 整合-1 | `langchain` + `@langchain/core` + `@langchain/langgraph` + `@langchain/openai`（4 个最小包） |
-| **文档同步** | `docs/04-架构文档/agent-架构.md` | 整合-1 + 整合-2 | §1.1 分层图加 runManager / §3.3 中断处理改写 / §6 局限表更新 |
+| 改动类型     | 路径                                          | Task            | 改动一句话                                                                                   |
+| ------------ | --------------------------------------------- | --------------- | -------------------------------------------------------------------------------------------- |
+| **新增**     | `src/agent/langgraph-agent.ts`                | 整合-1          | `createAgent` + 工具 wrap + `buildChatModel`（165 行）                                       |
+|              | `src/agent/langgraphToAgUi.ts`                | 整合-1          | LangGraph streamEvents v2 → AG-UI 翻译器（352 行）                                           |
+|              | `src/agent/runManager.ts`                     | 整合-2          | 进程内 Run 注册表 + 事件总线 + 三态 abort（421 行）                                          |
+|              | `src/db/runRepo.ts`                           | 整合-2          | agent_runs / agent_run_events CRUD + 启动清理（178 行）                                      |
+|              | `src/db/migrations/003_agent_runs_events.sql` | 整合-2          | agent_runs + agent_run_events 表 + chat_sessions.status 字段                                 |
+| **改代码**   | `src/index.ts`                                | 整合-1 + 整合-2 | handler 从直接调 agent 改为 `runManager.start + subscribe`；新增 3 个 Run 路由               |
+|              | `src/agent/llm.ts`                            | 整合-1          | 删除 `runAgentStream`，瘦身为类型导出（34 行）                                               |
+|              | `src/db/chatRepo.ts`                          | 整合-2          | 新增 `SessionStatus` + 5 个函数（status / stub / flush / 启动清理）                          |
+| **改前端**   | `web/src/api.ts`                              | 整合-2          | 新增 `getActiveRun` / `cancelRun` / `resumeRunStream` + `parseSseStream` 公共化              |
+|              | `web/src/App.tsx`                             | 整合-2          | 会话续订（`switchSession` → `startResume`）+ 停止按钮 + `consumeStream` 公共化               |
+| **依赖**     | `package.json`                                | 整合-1          | `langchain` + `@langchain/core` + `@langchain/langgraph` + `@langchain/openai`（4 个最小包） |
+| **文档同步** | `docs/04-架构文档/agent-架构.md`              | 整合-1 + 整合-2 | §1.1 分层图加 runManager / §3.3 中断处理改写 / §6 局限表更新                                 |
 
 ---
 
