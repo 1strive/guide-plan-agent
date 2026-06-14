@@ -5,6 +5,10 @@ export type SessionItem = {
   title: string | null
   totalTokens: number
   createdAt: string
+  /** Sidebar 设计稿对齐：最近一条消息内容（任意 role），用于会话项 preview 行 */
+  lastMessage: string | null
+  /** Sidebar 设计稿对齐：user+assistant 消息数，用于会话项 badge */
+  messageCount: number
 }
 
 export type ChatMsgItem = {

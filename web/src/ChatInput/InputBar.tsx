@@ -108,7 +108,7 @@ export function InputBar() {
           </div>
         </div>
         <div className="text-center text-[11px] text-fg-subtle mt-2">
-          Enter 发送 · Shift+Enter 换行
+          Enter 发送 · Shift+Enter 换行 · 内容由 AI 生成，请核实关键信息
         </div>
       </div>
     </div>

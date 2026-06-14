@@ -39,16 +39,31 @@ export async function listRecentMessages(
   return list.reverse()
 }
 
+// Sidebar 设计稿对齐：lastMessage / messageCount 字段供前端 preview 与 badge 渲染
 export type SessionRow = {
   id: string
   title: string | null
   totalTokens: number
   createdAt: string
+  lastMessage: string | null
+  messageCount: number
 }
 
 export async function listSessions(pool: DbPool): Promise<SessionRow[]> {
   const [rows] = await pool.query<RowDataPacket[]>(
-    'SELECT id, title, total_tokens AS totalTokens, created_at AS createdAt FROM chat_sessions ORDER BY created_at DESC'
+    `SELECT
+       s.id,
+       s.title,
+       s.total_tokens AS totalTokens,
+       s.created_at   AS createdAt,
+       (SELECT content FROM chat_messages
+          WHERE session_id = s.id
+          ORDER BY id DESC LIMIT 1) AS lastMessage,
+       (SELECT COUNT(*) FROM chat_messages
+          WHERE session_id = s.id
+            AND role IN ('user','assistant')) AS messageCount
+     FROM chat_sessions s
+     ORDER BY s.created_at DESC`
   )
   return rows as SessionRow[]
 }

@@ -9,21 +9,21 @@
 
 ## 1. 传输层
 
-| 项 | 值 |
-|---|---|
-| 协议 | Server-Sent Events(SSE) |
-| Content-Type | `text/event-stream; charset=utf-8` |
-| 帧格式 | `data: {JSON}\n\n` |
-| 心跳 | `: ping\n\n`(每 15s,SSE 注释行,客户端忽略) |
-| 响应头 | `X-Trace-Id: <runId>`(日志关联用) |
-| 连接关闭 | 服务端 `reply.raw.end()`;客户端断开仅 unsubscribe,Run 继续跑 |
+| 项           | 值                                                           |
+| ------------ | ------------------------------------------------------------ |
+| 协议         | Server-Sent Events(SSE)                                      |
+| Content-Type | `text/event-stream; charset=utf-8`                           |
+| 帧格式       | `data: {JSON}\n\n`                                           |
+| 心跳         | `: ping\n\n`(每 15s,SSE 注释行,客户端忽略)                   |
+| 响应头       | `X-Trace-Id: <runId>`(日志关联用)                            |
+| 连接关闭     | 服务端 `reply.raw.end()`;客户端断开仅 unsubscribe,Run 继续跑 |
 
 ### SSE 入口
 
-| 接口 | 方法 | 用途 |
-|------|------|------|
-| `/sessions/:id/stream` | POST body: `{ message: string }` | 发起新对话 |
-| `/sessions/:id/runs/:runId/stream?after_seq=N` | GET | 续订(先回放历史,再接实时) |
+| 接口                                           | 方法                             | 用途                      |
+| ---------------------------------------------- | -------------------------------- | ------------------------- |
+| `/sessions/:id/stream`                         | POST body: `{ message: string }` | 发起新对话                |
+| `/sessions/:id/runs/:runId/stream?after_seq=N` | GET                              | 续订(先回放历史,再接实时) |
 
 ---
 
@@ -44,11 +44,11 @@ Run 创建,流开始。
 }
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| threadId | string | 会话 ID(= sessionId) |
-| runId | string | 本次 Run 唯一标识 |
-| timestamp | number | 毫秒时间戳 |
+| 字段      | 类型   | 说明                 |
+| --------- | ------ | -------------------- |
+| threadId  | string | 会话 ID(= sessionId) |
+| runId     | string | 本次 Run 唯一标识    |
+| timestamp | number | 毫秒时间戳           |
 
 **前端动作**:保存 `runId` 到 ref(给「停止」按钮 / 续订用),不渲染。
 
@@ -64,49 +64,59 @@ Run 结束(正常完成 / 反问中断 / 取消后)。**这是 SSE 流的最后�
   "threadId": "session-uuid",
   "runId": "run-uuid",
   "outcome": { "type": "success" },
-  "usage": { "promptTokens": 1200, "completionTokens": 300, "totalTokens": 1500 },
+  "usage": {
+    "promptTokens": 1200,
+    "completionTokens": 300,
+    "totalTokens": 1500
+  },
   "sources": [
-    { "type": "mcp", "name": "amap", "metadata": { "tool": "maps_search_nearby" } }
+    {
+      "type": "mcp",
+      "name": "amap",
+      "metadata": { "tool": "maps_search_nearby" }
+    }
   ],
   "timestamp": 1780808660000
 }
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| outcome | `{ type: 'success' }` 或 `{ type: 'interrupt', interrupts: [...] }` 或 `undefined` | 结束原因 |
-| usage | `{ promptTokens, completionTokens, totalTokens }` 或 undefined | 本次 token 消耗 |
-| sources | `Source[]` 或 undefined | 引用过的数据来源(MCP 工具) |
+| 字段    | 类型                                                                               | 说明                       |
+| ------- | ---------------------------------------------------------------------------------- | -------------------------- |
+| outcome | `{ type: 'success' }` 或 `{ type: 'interrupt', interrupts: [...] }` 或 `undefined` | 结束原因                   |
+| usage   | `{ promptTokens, completionTokens, totalTokens }` 或 undefined                     | 本次 token 消耗            |
+| sources | `Source[]` 或 undefined                                                            | 引用过的数据来源(MCP 工具) |
 
 **outcome.type 取值**:
 
-| outcome.type | 含义 | 前端动作 |
-|---|---|---|
-| `"success"` | 正常完成 | 标记流结束,刷新会话列表 |
-| `"interrupt"` | 反问,需要用户补充信息 | 渲染选项按钮 |
-| `undefined` | 异常结束(伴随 RUN_ERROR) | 同 error 处理 |
+| outcome.type  | 含义                     | 前端动作                |
+| ------------- | ------------------------ | ----------------------- |
+| `"success"`   | 正常完成                 | 标记流结束,刷新会话列表 |
+| `"interrupt"` | 反问,需要用户补充信息    | 渲染选项按钮            |
+| `undefined`   | 异常结束(伴随 RUN_ERROR) | 同 error 处理           |
 
 **interrupt 子结构**(outcome.type = "interrupt" 时):
 
 ```json
 {
   "type": "interrupt",
-  "interrupts": [{
-    "id": "interrupt-uuid",
-    "reason": "input_required",
-    "message": "请问您从哪个城市出发?",
-    "metadata": {
-      "options": ["华东地区", "华南地区", "华北地区", "其他"]
+  "interrupts": [
+    {
+      "id": "interrupt-uuid",
+      "reason": "input_required",
+      "message": "请问您从哪个城市出发?",
+      "metadata": {
+        "options": ["华东地区", "华南地区", "华北地区", "其他"]
+      }
     }
-  }]
+  ]
 }
 ```
 
-| 字段 | 说明 |
-|------|------|
-| interrupts[0].id | 反问 ID,resume 时回传 |
-| interrupts[0].message | 反问文本(展示给用户) |
-| interrupts[0].metadata.options | 选项列表(渲染为按钮) |
+| 字段                           | 说明                  |
+| ------------------------------ | --------------------- |
+| interrupts[0].id               | 反问 ID,resume 时回传 |
+| interrupts[0].message          | 反问文本(展示给用户)  |
+| interrupts[0].metadata.options | 选项列表(渲染为按钮)  |
 
 ---
 
@@ -123,10 +133,10 @@ Run 执行出错(LLM 超时 / 工具失败 / 内部异常)。通常紧跟 RUN_FI
 }
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| message | string | 错误描述 |
-| code | string 或 undefined | 错误分类码 |
+| 字段    | 类型                | 说明       |
+| ------- | ------------------- | ---------- |
+| message | string              | 错误描述   |
+| code    | string 或 undefined | 错误分类码 |
 
 **前端动作**:在当前 assistant 消息中追加 `[错误] ${message}`。
 
@@ -145,11 +155,11 @@ Run 执行出错(LLM 超时 / 工具失败 / 内部异常)。通常紧跟 RUN_FI
 
 **stepName 取值**:
 
-| stepName | 含义 | 说明 |
-|---|---|---|
-| `"generating"` | LLM 正在生成 | 包含 THINKING + TEXT_MESSAGE 事件 |
-| `"tool_call"` | 准备调工具 | 包含 TOOL_CALL_START/ARGS/END |
-| `"tool_execution"` | 工具执行中 | 包含 TOOL_CALL_RESULT |
+| stepName           | 含义         | 说明                              |
+| ------------------ | ------------ | --------------------------------- |
+| `"generating"`     | LLM 正在生成 | 包含 THINKING + TEXT_MESSAGE 事件 |
+| `"tool_call"`      | 准备调工具   | 包含 TOOL_CALL_START/ARGS/END     |
+| `"tool_execution"` | 工具执行中   | 包含 TOOL_CALL_RESULT             |
 
 **前端动作**(可选):顶部进度条 / 状态标签切换。不渲染也不影响功能。
 
@@ -185,8 +195,8 @@ Run 执行出错(LLM 超时 / 工具失败 / 内部异常)。通常紧跟 RUN_FI
 }
 ```
 
-| 字段 | 说明 |
-|------|------|
+| 字段  | 说明                                             |
+| ----- | ------------------------------------------------ |
 | delta | 本次增量文本片段(UTF-8,可能是 1 个字 ~ 几十个字) |
 
 **前端动作**:累加 `delta` 到 assistant 消息的 `content` 字段,实时刷新渲染。
@@ -255,9 +265,9 @@ Run 执行出错(LLM 超时 / 工具失败 / 内部异常)。通常紧跟 RUN_FI
 }
 ```
 
-| 字段 | 说明 |
-|------|------|
-| toolCallId | 本次工具调用唯一 ID |
+| 字段         | 说明                           |
+| ------------ | ------------------------------ |
+| toolCallId   | 本次工具调用唯一 ID            |
 | toolCallName | 工具名(MCP server 注册的 name) |
 
 **前端动作**:显示工具调用 chip(名称 + ⏳ 状态)。
@@ -306,10 +316,10 @@ Run 执行出错(LLM 超时 / 工具失败 / 内部异常)。通常紧跟 RUN_FI
 }
 ```
 
-| 字段 | 说明 |
-|------|------|
-| content | 工具返回的原始 JSON 字符串(可能很长) |
-| toolCallId | 对应 TOOL_CALL_START 的 ID |
+| 字段       | 说明                                 |
+| ---------- | ------------------------------------ |
+| content    | 工具返回的原始 JSON 字符串(可能很长) |
+| toolCallId | 对应 TOOL_CALL_START 的 ID           |
 
 **前端动作**:工具 chip 状态 → ✅;可选展开显示结果摘要。
 
@@ -387,34 +397,47 @@ RUN_STARTED
 
 ## 4. HTTP REST 接口汇总(非 SSE)
 
-| Method | Path | 请求 | 响应 | 用途 |
-|--------|------|------|------|------|
-| GET | `/health` | — | `{ ok: boolean, db: boolean }` | 健康检查 |
-| GET | `/metrics` | — | `{ totalRuns, completedRuns, failedRuns, errorRate, avgDurationMs, totalTokens, recentErrors }` | 运行统计 |
-| GET | `/sessions` | — | `{ sessions: SessionItem[] }` | 会话列表 |
-| POST | `/sessions` | — | `201 { sessionId: string }` | 创建空会话 |
-| GET | `/sessions/:id/messages` | — | `{ messages: ChatMsg[], status: 'running'\|'end' }` | 历史消息 + 状态 |
-| DELETE | `/sessions/:id` | — | `204` | 删除会话(FK 级联清消息) |
-| GET | `/sessions/:id/runs/active` | — | `{ active: AgentRunRow \| null }` | 查活跃 Run(续订用) |
-| POST | `/sessions/:id/runs/:runId/cancel` | — | `202 { cancelled: boolean }` | 主动停止 Run |
+| Method | Path                               | 请求 | 响应                                                                                            | 用途                    |
+| ------ | ---------------------------------- | ---- | ----------------------------------------------------------------------------------------------- | ----------------------- |
+| GET    | `/health`                          | —    | `{ ok: boolean, db: boolean }`                                                                  | 健康检查                |
+| GET    | `/metrics`                         | —    | `{ totalRuns, completedRuns, failedRuns, errorRate, avgDurationMs, totalTokens, recentErrors }` | 运行统计                |
+| GET    | `/sessions`                        | —    | `{ sessions: SessionItem[] }`                                                                   | 会话列表                |
+| POST   | `/sessions`                        | —    | `201 { sessionId: string }`                                                                     | 创建空会话              |
+| GET    | `/sessions/:id/messages`           | —    | `{ messages: ChatMsg[], status: 'running'\|'end' }`                                             | 历史消息 + 状态         |
+| DELETE | `/sessions/:id`                    | —    | `204`                                                                                           | 删除会话(FK 级联清消息) |
+| GET    | `/sessions/:id/runs/active`        | —    | `{ active: AgentRunRow \| null }`                                                               | 查活跃 Run(续订用)      |
+| POST   | `/sessions/:id/runs/:runId/cancel` | —    | `202 { cancelled: boolean }`                                                                    | 主动停止 Run            |
 
 ### SessionItem 结构
 
 ```ts
-{ id: string; title: string | null; totalTokens: number; createdAt: string }
+{
+  id: string;
+  title: string | null;
+  totalTokens: number;
+  createdAt: string;
+  lastMessage: string | null; // Sidebar preview：最近一条消息 content（任意 role）
+  messageCount: number; // Sidebar badge：user+assistant 计数
+}
 ```
 
 ### AgentRunRow 结构
 
 ```ts
 {
-  runId: string
-  sessionId: string
-  status: 'pending' | 'running' | 'completed' | 'interrupted' | 'cancelling' | 'cancelled' | 'failed'
-  startedAt: string
-  finishedAt: string | null
-  lastEventSeq: number
-  totalTokens: number
+  runId: string;
+  sessionId: string;
+  status: "pending" |
+    "running" |
+    "completed" |
+    "interrupted" |
+    "cancelling" |
+    "cancelled" |
+    "failed";
+  startedAt: string;
+  finishedAt: string | null;
+  lastEventSeq: number;
+  totalTokens: number;
 }
 ```
 
@@ -422,20 +445,20 @@ RUN_STARTED
 
 ## 5. 前端渲染优先级建议
 
-| 事件 | 优先级 | 建议 UI |
-|------|:---:|------|
-| TEXT_MESSAGE_CONTENT | **P0 必须** | 主回答区,流式追加文本 |
-| RUN_FINISHED(interrupt) | **P0 必须** | 反问文本 + 选项按钮 |
-| RUN_ERROR | **P0 必须** | 错误提示(红色/警告样式) |
-| TOOL_CALL_START | **P1 推荐** | 工具调用 chip(工具名 + ⏳ loading) |
-| TOOL_CALL_END | **P1 推荐** | chip 状态 ⏳ → ✅ |
-| THINKING_CONTENT | **P1 推荐** | 折叠区"思考过程",灰色小字,默认收起 |
-| TOOL_CALL_RESULT | P2 可选 | 展开查看工具返回结果(JSON 格式化) |
-| TOOL_CALL_ARGS | P2 可选 | 展开查看工具入参 |
-| STEP_STARTED/FINISHED | P2 可选 | 顶部进度条 / 阶段标签 |
-| RUN_STARTED | P3 内部 | 存 runId,不渲染 |
-| TEXT_MESSAGE_START/END | P3 内部 | 控制流边界,不直接渲染 |
-| THINKING_START/END | P3 内部 | 控制 thinking 折叠区显隐 |
+| 事件                    |   优先级    | 建议 UI                            |
+| ----------------------- | :---------: | ---------------------------------- |
+| TEXT_MESSAGE_CONTENT    | **P0 必须** | 主回答区,流式追加文本              |
+| RUN_FINISHED(interrupt) | **P0 必须** | 反问文本 + 选项按钮                |
+| RUN_ERROR               | **P0 必须** | 错误提示(红色/警告样式)            |
+| TOOL_CALL_START         | **P1 推荐** | 工具调用 chip(工具名 + ⏳ loading) |
+| TOOL_CALL_END           | **P1 推荐** | chip 状态 ⏳ → ✅                  |
+| THINKING_CONTENT        | **P1 推荐** | 折叠区"思考过程",灰色小字,默认收起 |
+| TOOL_CALL_RESULT        |   P2 可选   | 展开查看工具返回结果(JSON 格式化)  |
+| TOOL_CALL_ARGS          |   P2 可选   | 展开查看工具入参                   |
+| STEP_STARTED/FINISHED   |   P2 可选   | 顶部进度条 / 阶段标签              |
+| RUN_STARTED             |   P3 内部   | 存 runId,不渲染                    |
+| TEXT_MESSAGE_START/END  |   P3 内部   | 控制流边界,不直接渲染              |
+| THINKING_START/END      |   P3 内部   | 控制 thinking 折叠区显隐           |
 
 ---
 

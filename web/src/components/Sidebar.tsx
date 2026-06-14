@@ -185,9 +185,7 @@ export function Sidebar() {
                   key={s.id}
                   className={
                     "group flex items-start gap-2.5 py-2.5 mx-2 rounded-lg cursor-pointer transition-colors relative " +
-                    (active
-                      ? "bg-sidebar-active"
-                      : "hover:bg-sidebar-hover")
+                    (active ? "bg-sidebar-active" : "hover:bg-sidebar-hover")
                   }
                   onClick={() => switchSession(s.id)}
                 >
@@ -212,11 +210,19 @@ export function Sidebar() {
                       {displayTitle}
                     </div>
                     <div className="flex items-center gap-1.5 mt-0.5">
-                      <span className="text-[11px] text-sidebar-muted truncate max-w-[180px]">
-                        {displayTitle}
+                      <span
+                        className="text-[11px] text-sidebar-muted truncate max-w-[180px]"
+                        title={s.lastMessage ?? undefined}
+                      >
+                        {s.lastMessage?.trim() || "暂无消息"}
                       </span>
+                      {s.messageCount > 0 && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-sidebar-hover text-sidebar-muted shrink-0">
+                          {s.messageCount} 条
+                        </span>
+                      )}
                       {s.totalTokens > 0 && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-sidebar-hover text-sidebar-muted">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-sidebar-hover text-sidebar-muted shrink-0">
                           {s.totalTokens > 1000
                             ? `${Math.round(s.totalTokens / 1000)}k`
                             : s.totalTokens}
@@ -239,16 +245,20 @@ export function Sidebar() {
         ))}
       </div>
 
-      {/* User footer */}
+      {/* User footer
+          设计稿对齐：姓字头像 + 用户名 + 「探险者版 · 已规划 N 条路线」
+          暂无登录系统，姓名常量化为「我」；后续接入账号后取用户名首字 */}
       <div className="p-3 border-t border-sidebar-hover flex items-center gap-2.5">
         <div className="w-8 h-8 rounded-full bg-sidebar-active grid place-items-center text-[13px] font-semibold text-sidebar-fg flex-shrink-0">
-          U
+          我
         </div>
         <div className="flex-1 min-w-0">
           <div className="text-[13px] font-medium text-sidebar-fg truncate">
-            用户
+            我
           </div>
-          <div className="text-[11px] text-sidebar-muted">探索者版</div>
+          <div className="text-[11px] text-sidebar-muted truncate">
+            探险者版 · 已规划 {sessions.length} 条路线
+          </div>
         </div>
       </div>
     </aside>

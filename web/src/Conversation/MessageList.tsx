@@ -2,12 +2,14 @@ import { useRef, useEffect } from "react";
 import { useChatStore } from "../store/chatStore";
 import { MessageBubble } from "./MessageBubble";
 import { WelcomeBanner } from "./WelcomeBanner";
+import { ScrollToBottom } from "./ScrollToBottom";
 import { IconCompass } from "../components/Icons";
 
 export function MessageList() {
   const messages = useChatStore((s) => s.messages);
   const sending = useChatStore((s) => s.sending);
   const activeId = useChatStore((s) => s.activeId);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -25,7 +27,7 @@ export function MessageList() {
     );
 
   return (
-    <div className="flex-1 overflow-y-auto">
+    <div className="flex-1 overflow-y-auto relative" ref={scrollRef}>
       <div className="max-w-[760px] mx-auto px-8 py-6">
         {messages.length === 0 && (
           <div className="pt-12">
@@ -38,9 +40,21 @@ export function MessageList() {
             )}
           </div>
         )}
-        {messages.map((msg, i) => (
-          <MessageBubble key={i} msg={msg} />
-        ))}
+        {messages.map((msg, i) => {
+          // 设计稿对齐：assistant Toolbox 重试需要上一条 user 文本
+          const prev = messages[i - 1];
+          const prevUserContent =
+            msg.role === "assistant" && prev?.role === "user"
+              ? prev.content
+              : undefined;
+          return (
+            <MessageBubble
+              key={i}
+              msg={msg}
+              prevUserContent={prevUserContent}
+            />
+          );
+        })}
         {showLoading && (
           <div className="flex gap-3 items-start mb-6">
             <div className="w-7 h-7 rounded-lg bg-accent-soft text-primary grid place-items-center flex-shrink-0 mt-0.5">
@@ -56,6 +70,7 @@ export function MessageList() {
         )}
         <div ref={chatEndRef} />
       </div>
+      <ScrollToBottom containerRef={scrollRef} />
     </div>
   );
 }

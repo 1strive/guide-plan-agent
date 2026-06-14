@@ -6,6 +6,7 @@ import { InterruptCard } from "../ChatInput/InterruptCard";
 import { Toolbox } from "./Toolbox";
 import { QuickReplies } from "./QuickReplies";
 import { IconCompass } from "../components/Icons";
+import { useChatStore } from "../store/chatStore";
 
 function UserBubble({ content }: { content: string }) {
   return (
@@ -17,7 +18,18 @@ function UserBubble({ content }: { content: string }) {
   );
 }
 
-function AssistantBubble({ msg }: { msg: ChatMsg }) {
+function AssistantBubble({
+  msg,
+  prevUserContent,
+}: {
+  msg: ChatMsg;
+  prevUserContent?: string;
+}) {
+  // 设计稿对齐：重试 = 把上一条 user 文本回填输入框，不动发送与历史
+  const handleRetry = prevUserContent
+    ? () => useChatStore.getState().setInput(prevUserContent)
+    : undefined;
+
   return (
     <div className="flex gap-3 items-start mb-6 group">
       <div className="w-7 h-7 rounded-lg bg-accent-soft text-primary grid place-items-center flex-shrink-0 mt-0.5">
@@ -40,16 +52,22 @@ function AssistantBubble({ msg }: { msg: ChatMsg }) {
           </div>
         )}
         {msg.interrupt && <InterruptCard interrupt={msg.interrupt} />}
-        {msg.content && <Toolbox content={msg.content} />}
+        {msg.content && <Toolbox content={msg.content} onRetry={handleRetry} />}
         {msg.quickReplies && <QuickReplies options={msg.quickReplies} />}
       </div>
     </div>
   );
 }
 
-export function MessageBubble({ msg }: { msg: ChatMsg }) {
+export function MessageBubble({
+  msg,
+  prevUserContent,
+}: {
+  msg: ChatMsg;
+  prevUserContent?: string;
+}) {
   if (msg.role === "user") {
     return <UserBubble content={msg.content} />;
   }
-  return <AssistantBubble msg={msg} />;
+  return <AssistantBubble msg={msg} prevUserContent={prevUserContent} />;
 }
