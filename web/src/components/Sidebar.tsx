@@ -6,7 +6,7 @@ import {
   useDeleteSession,
 } from "../query/useSessionQuery";
 import { useStreamChat } from "../hooks/useStreamChat";
-import { IconPlus, IconSearch, IconRoute, IconLocation } from "./Icons";
+import { IconPlus, IconSearch, IconRoute } from "./Icons";
 import * as api from "../api";
 import type { SessionItem, ChatMsg } from "../types";
 
@@ -123,17 +123,17 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="w-[320px] min-w-[320px] flex flex-col bg-sidebar border-r border-sidebar-border">
+    <aside className="w-[320px] min-w-[320px] flex flex-col bg-sidebar">
       {/* Brand */}
-      <div className="px-5 pt-5 pb-4 flex items-center gap-2.5">
-        <div className="w-8 h-8 rounded-lg bg-primary grid place-items-center text-primary-foreground flex-shrink-0">
+      <div className="px-5 pt-5 pb-4 flex items-start gap-2.5">
+        <div className="w-8 h-8 rounded-lg bg-sidebar-primary grid place-items-center text-sidebar-primary-foreground flex-shrink-0 overflow-hidden">
           <IconRoute size={18} />
         </div>
-        <div>
-          <div className="text-[15px] font-semibold text-sidebar-fg tracking-tight">
+        <div className="flex flex-col gap-0.5">
+          <div className="text-[15px] font-bold text-sidebar-fg leading-normal">
             路书
           </div>
-          <div className="text-[11px] text-sidebar-muted tracking-wide">
+          <div className="text-[11px] text-sidebar-muted leading-normal">
             旅行规划助手
           </div>
         </div>
@@ -141,7 +141,7 @@ export function Sidebar() {
 
       {/* New trip button */}
       <button
-        className="mx-3 mb-3 px-3.5 py-2.5 bg-primary text-primary-foreground rounded-lg text-[13px] font-medium flex items-center gap-2 hover:bg-accent-hover transition-colors w-[calc(100%-24px)] text-left"
+        className="mx-3 mb-3 px-3.5 py-2.5 bg-sidebar-primary text-sidebar-primary-foreground rounded-lg text-[13px] font-medium flex items-center gap-2 hover:opacity-90 transition-opacity w-[calc(100%-24px)] text-left h-[40px]"
         onClick={handleNewSession}
       >
         <IconPlus size={16} />
@@ -149,31 +149,36 @@ export function Sidebar() {
       </button>
 
       {/* Search */}
-      <div className="mx-3 mb-2 relative">
+      <div className="mx-3 mb-3 relative">
         <IconSearch
           size={14}
           className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sidebar-muted pointer-events-none"
         />
         <input
           type="text"
-          placeholder="搜索历史对话…"
+          placeholder="搜索历史对话..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="w-full py-2 pl-8 pr-2.5 bg-sidebar-hover border border-transparent rounded-lg text-sidebar-fg text-[13px] outline-none placeholder:text-sidebar-muted focus:border-primary focus:bg-sidebar-active transition-colors"
+          className="w-full h-[36px] pl-8 pr-3 bg-sidebar-hover border border-transparent rounded-lg text-sidebar-fg text-[13px] outline-none placeholder:text-sidebar-muted focus:border-sidebar-primary focus:bg-sidebar-active transition-colors"
         />
       </div>
 
       {/* Session list */}
-      <div className="flex-1 overflow-y-auto pb-2 sidebar-scroll">
+      <div className="flex-1 overflow-y-auto py-2 sidebar-scroll">
         {filtered.length === 0 && (
-          <div className="text-center text-[13px] text-sidebar-muted py-8">
+          <div className="text-center text-[13px] text-sidebar-muted py-10">
             {search ? "未找到匹配会话" : "暂无会话"}
           </div>
         )}
-        {groups.map((group) => (
-          <div key={group.label}>
-            <div className="px-5 pt-3 pb-1">
-              <span className="text-[11px] font-semibold text-sidebar-muted uppercase tracking-wider">
+        {groups.map((group, groupIdx) => (
+          <div key={group.label} className="flex flex-col gap-0.5">
+            <div
+              className={
+                "px-5 pb-1 " +
+                (groupIdx === 0 ? "pt-2" : "pt-3")
+              }
+            >
+              <span className="text-[11px] font-bold text-sidebar-muted">
                 {group.label}
               </span>
             </div>
@@ -184,54 +189,31 @@ export function Sidebar() {
                 <div
                   key={s.id}
                   className={
-                    "group flex items-start gap-2.5 py-2.5 mx-2 rounded-lg cursor-pointer transition-colors relative " +
+                    "group flex items-start gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer transition-colors relative " +
                     (active ? "bg-sidebar-active" : "hover:bg-sidebar-hover")
                   }
                   onClick={() => switchSession(s.id)}
                 >
-                  {active && (
-                    <div className="absolute left-0 top-2 bottom-2 w-[3px] bg-primary rounded-r-sm" />
-                  )}
-                  <IconLocation
-                    size={18}
+                  <IconRoute
+                    size={16}
                     className={
                       "mt-0.5 flex-shrink-0 " +
-                      (active ? "text-primary" : "text-sidebar-muted")
+                      (active ? "text-sidebar-primary" : "text-sidebar-muted")
                     }
                   />
-                  <div className="flex-1 min-w-0 pr-6">
+                  <div className="flex-1 min-w-0 pr-5">
                     <div
-                      className={
-                        "text-[13px] font-medium truncate leading-snug " +
-                        (active ? "text-sidebar-fg" : "text-sidebar-fg")
-                      }
+                      className="text-[13px] font-medium truncate leading-snug text-sidebar-fg"
                       title={displayTitle}
                     >
                       {displayTitle}
                     </div>
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      <span
-                        className="text-[11px] text-sidebar-muted truncate max-w-[180px]"
-                        title={s.lastMessage ?? undefined}
-                      >
-                        {s.lastMessage?.trim() || "暂无消息"}
-                      </span>
-                      {s.messageCount > 0 && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-sidebar-hover text-sidebar-muted shrink-0">
-                          {s.messageCount} 条
-                        </span>
-                      )}
-                      {s.totalTokens > 0 && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-sidebar-hover text-sidebar-muted shrink-0">
-                          {s.totalTokens > 1000
-                            ? `${Math.round(s.totalTokens / 1000)}k`
-                            : s.totalTokens}
-                        </span>
-                      )}
+                    <div className="text-[11px] text-sidebar-muted truncate mt-0.5">
+                      {s.lastMessage?.trim() || "暂无消息"}
                     </div>
                   </div>
                   <button
-                    className="absolute top-2 right-2 w-6 h-6 inline-flex items-center justify-center rounded text-sidebar-muted opacity-0 group-hover:opacity-100 transition-all hover:bg-destructive hover:text-destructive-foreground text-xs"
+                    className="absolute top-2.5 right-3 w-5 h-5 inline-flex items-center justify-center rounded text-sidebar-muted opacity-0 group-hover:opacity-100 transition-all hover:bg-destructive hover:text-destructive-foreground text-xs"
                     onClick={(e) => handleDeleteSession(s.id, e)}
                     title="删除会话"
                     aria-label="删除会话"
@@ -245,14 +227,12 @@ export function Sidebar() {
         ))}
       </div>
 
-      {/* User footer
-          设计稿对齐：姓字头像 + 用户名 + 「探险者版 · 已规划 N 条路线」
-          暂无登录系统，姓名常量化为「我」；后续接入账号后取用户名首字 */}
-      <div className="p-3 border-t border-sidebar-hover flex items-center gap-2.5">
-        <div className="w-8 h-8 rounded-full bg-sidebar-active grid place-items-center text-[13px] font-semibold text-sidebar-fg flex-shrink-0">
+      {/* User footer */}
+      <div className="px-3 py-3 border-t border-sidebar-border flex items-center gap-2.5 h-[64px]">
+        <div className="w-8 h-8 rounded-2xl bg-sidebar-active grid place-items-center text-[13px] font-bold text-sidebar-fg flex-shrink-0">
           我
         </div>
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 flex flex-col gap-0.5">
           <div className="text-[13px] font-medium text-sidebar-fg truncate">
             我
           </div>

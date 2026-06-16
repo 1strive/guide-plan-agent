@@ -49,19 +49,19 @@
   --button-bg-disabled: #e4dfda;
 
   /* ---------- Sidebar (dark) ---------- */
-  --sidebar: #302c2a;
-  --sidebar-fg: #f2eeea;
-  --sidebar-muted: #9e9791;
-  --sidebar-hover: #3d3835;
-  --sidebar-active: #4d3f38;
-  --sidebar-primary: #c4513a;
-  --sidebar-primary-foreground: #fcfcfc;
-  --sidebar-accent: #4d3f38;
-  --sidebar-accent-foreground: #f2eeea;
-  --sidebar-border: #292524;
-  --sidebar-ring: #c4513a;
-  --sidebar-button-hover: #3d3835;
-  --sidebar-weak: #9e9791;
+  --sidebar: #221812;
+  --sidebar-fg: #f1eeeb;
+  --sidebar-muted: #968d89;
+  --sidebar-hover: #312620;
+  --sidebar-active: #452c24;
+  --sidebar-primary: #c25430;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #452c24;
+  --sidebar-accent-foreground: #f1eeeb;
+  --sidebar-border: #312620;
+  --sidebar-ring: #c25430;
+  --sidebar-button-hover: #312620;
+  --sidebar-weak: #968d89;
 
   /* ---------- Message ---------- */
   --user-bg: #c4513a;

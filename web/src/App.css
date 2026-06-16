@@ -10,10 +10,12 @@
  * 设计规范：web/DESIGN.md
  */
 
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
+@layer base {
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
 }
 
 html,
@@ -42,4 +44,40 @@ input,
 textarea {
   font: inherit;
   color: inherit;
+}
+
+/* 自定义滚动条 — Sidebar */
+.sidebar-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-scroll::-webkit-scrollbar-thumb {
+  background: var(--sidebar-hover);
+  border-radius: 3px;
+}
+
+.sidebar-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--sidebar-muted);
+}
+
+/* 自定义滚动条 — MessageList */
+.message-list-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.message-list-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.message-list-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+.message-list-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
 }

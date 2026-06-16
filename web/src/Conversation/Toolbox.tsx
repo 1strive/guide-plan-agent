@@ -25,10 +25,10 @@ export function Toolbox({
   }
 
   return (
-    <div className="flex items-center gap-0.5 mt-2 opacity-50 group-hover:opacity-100 transition-opacity duration-200">
+    <div className="flex items-center gap-1 mt-3 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
       {onRetry && (
         <button
-          className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[12px] text-fg-muted hover:bg-surface-alt hover:text-foreground transition-colors"
+          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[12px] text-muted-foreground hover:bg-surface-alt hover:text-foreground transition-colors"
           onClick={onRetry}
           title="将上一条提问回填输入框以便重发"
         >
@@ -37,7 +37,7 @@ export function Toolbox({
         </button>
       )}
       <button
-        className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[12px] text-fg-muted hover:bg-surface-alt hover:text-foreground transition-colors"
+        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[12px] text-muted-foreground hover:bg-surface-alt hover:text-foreground transition-colors"
         onClick={handleCopy}
       >
         {copied ? (

@@ -10,8 +10,8 @@ import { useChatStore } from "../store/chatStore";
 
 function UserBubble({ content }: { content: string }) {
   return (
-    <div className="flex justify-end mb-6">
-      <div className="bg-user-bg text-user-fg px-4 py-2.5 rounded-xl rounded-br-sm max-w-[560px] text-sm leading-[1.65] whitespace-pre-wrap break-words">
+    <div className="flex justify-end mb-8">
+      <div className="bg-user-bg text-user-fg px-4 py-3 rounded-2xl rounded-br-md max-w-[560px] text-[14px] leading-[1.7] whitespace-pre-wrap break-words shadow-card">
         {content}
       </div>
     </div>
@@ -31,21 +31,23 @@ function AssistantBubble({
     : undefined;
 
   return (
-    <div className="flex gap-3 items-start mb-6 group">
-      <div className="w-7 h-7 rounded-lg bg-accent-soft text-primary grid place-items-center flex-shrink-0 mt-0.5">
-        <IconCompass size={16} />
+    <div className="flex gap-4 items-start mb-8 group">
+      <div className="w-8 h-8 rounded-lg bg-accent-soft text-primary grid place-items-center flex-shrink-0 mt-0.5 shadow-subtle">
+        <IconCompass size={18} />
       </div>
       <div className="flex-1 min-w-0">
-        <div className="text-xs font-semibold text-fg-muted mb-1.5">路书</div>
+        <div className="text-xs font-semibold text-muted-foreground mb-2">
+          路书
+        </div>
         {msg.interrupt && (
-          <div className="inline-block px-3 py-1 rounded-lg bg-accent text-accent-foreground text-xs font-semibold mb-2">
+          <div className="inline-block px-3 py-1.5 rounded-lg bg-accent text-accent-foreground text-xs font-semibold mb-3 shadow-mist">
             需要补充信息
           </div>
         )}
         {msg.thinking && <ThinkingBlock thinking={msg.thinking} />}
         <TextContent content={msg.content} />
         {msg.toolCalls && msg.toolCalls.length > 0 && (
-          <div className="flex flex-wrap gap-2 mt-3">
+          <div className="flex flex-wrap gap-2 mt-4">
             {msg.toolCalls.map((tc, j) => (
               <ToolCallChip key={j} toolCall={tc} />
             ))}

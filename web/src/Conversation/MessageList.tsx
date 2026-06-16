@@ -27,14 +27,14 @@ export function MessageList() {
     );
 
   return (
-    <div className="flex-1 overflow-y-auto relative" ref={scrollRef}>
-      <div className="max-w-[760px] mx-auto px-8 py-6">
+    <div className="flex-1 overflow-y-auto relative message-list-scroll">
+      <div className="max-w-[760px] mx-auto px-10 py-8">
         {messages.length === 0 && (
-          <div className="pt-12">
+          <div className="pt-8">
             {activeId ? (
               <WelcomeBanner />
             ) : (
-              <div className="text-center text-fg-subtle text-sm">
+              <div className="text-center text-muted-foreground text-sm py-20">
                 点击左侧「开始新旅行」创建会话
               </div>
             )}
@@ -56,15 +56,15 @@ export function MessageList() {
           );
         })}
         {showLoading && (
-          <div className="flex gap-3 items-start mb-6">
-            <div className="w-7 h-7 rounded-lg bg-accent-soft text-primary grid place-items-center flex-shrink-0 mt-0.5">
-              <IconCompass size={16} />
+          <div className="flex gap-4 items-start mb-8">
+            <div className="w-8 h-8 rounded-lg bg-accent-soft text-primary grid place-items-center flex-shrink-0 mt-0.5 shadow-subtle">
+              <IconCompass size={18} />
             </div>
             <div className="flex-1">
-              <div className="text-xs font-semibold text-fg-muted mb-1.5">
+              <div className="text-xs font-semibold text-muted-foreground mb-2">
                 路书
               </div>
-              <div className="text-sm text-fg-muted italic">思考中…</div>
+              <div className="text-sm text-muted-foreground italic">思考中…</div>
             </div>
           </div>
         )}

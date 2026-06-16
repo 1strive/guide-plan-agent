@@ -10,21 +10,21 @@ const CHIPS = [
 
 export function WelcomeBanner() {
   return (
-    <div className="text-center py-8">
-      <div className="w-12 h-12 mx-auto mb-4 rounded-xl bg-accent-soft text-primary grid place-items-center">
-        <IconCompass size={24} />
+    <div className="text-center py-12">
+      <div className="w-14 h-14 mx-auto mb-5 rounded-xl bg-accent-soft text-primary grid place-items-center shadow-mist">
+        <IconCompass size={28} />
       </div>
-      <h2 className="text-xl font-semibold mb-1.5">
+      <h2 className="text-[20px] font-semibold mb-2 text-foreground">
         开始规划你的下一段旅程
       </h2>
-      <p className="text-sm text-fg-muted">
+      <p className="text-[14px] text-muted-foreground">
         告诉我目的地、时间和偏好，我来帮你规划最合适的路线
       </p>
-      <div className="flex justify-center flex-wrap gap-2 mt-5">
+      <div className="flex justify-center flex-wrap gap-3 mt-7">
         {CHIPS.map((chip) => (
           <button
             key={chip.label}
-            className="px-3.5 py-2 border border-border rounded-full text-[13px] text-foreground bg-surface hover:border-primary hover:bg-accent-soft transition-colors"
+            className="px-4 py-2.5 border border-border rounded-full text-[13px] text-foreground bg-surface hover:border-primary hover:bg-accent-soft hover:text-primary transition-all duration-200 shadow-subtle"
             onClick={() => {
               useChatStore.getState().setInput(chip.prompt);
             }}

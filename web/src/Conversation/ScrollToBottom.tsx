@@ -39,8 +39,8 @@ export function ScrollToBottom({
       aria-label="回到底部"
       title="回到底部"
       className={
-        "absolute bottom-6 right-8 w-9 h-9 rounded-full grid place-items-center " +
-        "bg-surface border border-border shadow-card text-fg-muted z-10 " +
+        "absolute bottom-10 right-10 w-10 h-10 rounded-full grid place-items-center " +
+        "bg-card border border-border shadow-popover text-muted-foreground z-10 " +
         "hover:bg-surface-alt hover:text-foreground " +
         "transition-opacity duration-200 " +
         (visible
@@ -48,7 +48,7 @@ export function ScrollToBottom({
           : "opacity-0 pointer-events-none")
       }
     >
-      <IconChevronDown size={16} />
+      <IconChevronDown size={18} />
     </button>
   );
 }

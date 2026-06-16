@@ -50,7 +50,29 @@
       "mcp__open-design__list_projects",
       "mcp__open-design__get_artifact",
       "mcp__open-design__list_files",
-      "mcp__open-design__get_file"
+      "mcp__open-design__get_file",
+      "Bash(mkdir -p ~/.claude/skills/figma-mcp-shaping)",
+      "Bash(cp /Users/ja/Desktop/guide-plan-agent/.claude/skills/my-skill/figma-mcp-shaping.md ~/.claude/skills/figma-mcp-shaping/SKILL.md)",
+      "Bash(rm -rf /Users/ja/Desktop/guide-plan-agent/.claude/skills/my-skill)",
+      "mcp__figma__get_screenshot",
+      "mcp__figma__get_metadata",
+      "WebFetch(domain:www.figma.com)",
+      "mcp__figma__get_design_context",
+      "Bash(npx vite *)",
+      "mcp__figma__get_code_connect_suggestions",
+      "mcp__figma__send_code_connect_mappings",
+      "Bash(pnpm dev *)",
+      "Bash(lsof -iTCP -sTCP:LISTEN -P)",
+      "Bash(osascript -e 'tell application \"Google Chrome\" to get URL of active tab of window 1')",
+      "Bash(osascript -e 'tell application \"Safari\" to get URL of current tab of window 1')",
+      "Bash(osascript -e 'tell application \"Google Chrome\" to get {URL, title} of every tab of every window')",
+      "Bash(open *)",
+      "Bash(screencapture -x /tmp/sidebar-check.png)",
+      "Bash(osascript *)",
+      "Bash(npx playwright *)",
+      "Bash(npx puppeteer *)",
+      "WebFetch(domain:localhost)",
+      "Bash(node *)"
     ]
   }
 }

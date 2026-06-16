@@ -7,26 +7,26 @@ export function ThinkingBlock({ thinking }: { thinking: string }) {
   return (
     <div
       className={
-        "mb-3 rounded-xl overflow-hidden bg-think-bg border border-think-border " +
+        "mb-4 rounded-xl overflow-hidden bg-think-bg border border-think-border shadow-subtle " +
         (!open ? "thinking-collapsed" : "")
       }
     >
       <button
-        className="flex items-center gap-2 px-3.5 py-2.5 w-full text-left text-[13px] font-medium text-think-accent hover:bg-[oklch(93%_0.016_250)] transition-colors"
+        className="flex items-center gap-2 px-4 py-3 w-full text-left text-[13px] font-medium text-think-accent hover:bg-[color-mix(in_srgb,var(--think-bg)_90%,var(--think-border))] transition-colors"
         onClick={() => setOpen((v) => !v)}
       >
-        <IconLightbulb size={14} />
+        <IconLightbulb size={15} />
         <span className="flex-1">思考过程</span>
         <IconChevronDown
-          size={14}
+          size={15}
           className={
-            "text-fg-subtle transition-transform duration-200 " +
+            "text-muted-foreground transition-transform duration-200 " +
             (!open ? "-rotate-90" : "")
           }
         />
       </button>
       <div
-        className="px-3.5 pb-3 text-[13px] leading-[1.7] text-think-content whitespace-pre-wrap break-words transition-all duration-300 ease-in-out overflow-hidden"
+        className="px-4 pb-3.5 text-[13px] leading-[1.75] text-think-content whitespace-pre-wrap break-words transition-all duration-300 ease-in-out overflow-hidden"
         style={{
           maxHeight: open ? "600px" : "0",
           paddingTop: open ? undefined : "0",
