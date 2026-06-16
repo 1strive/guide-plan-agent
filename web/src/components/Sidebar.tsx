@@ -6,7 +6,7 @@ import {
   useDeleteSession,
 } from "../query/useSessionQuery";
 import { useStreamChat } from "../hooks/useStreamChat";
-import { IconPlus, IconSearch, IconRoute } from "./Icons";
+import { IconSearch, IconRoute } from "./Icons";
 import * as api from "../api";
 import type { SessionItem, ChatMsg } from "../types";
 
@@ -141,10 +141,10 @@ export function Sidebar() {
 
       {/* New trip button */}
       <button
-        className="mx-3 mb-3 px-3.5 py-2.5 bg-sidebar-primary text-sidebar-primary-foreground rounded-lg text-[13px] font-medium flex items-center gap-2 hover:opacity-90 transition-opacity w-[calc(100%-24px)] text-left h-[40px]"
+        className="mx-3 mb-3 px-3.5 py-[10px] bg-sidebar-primary text-sidebar-primary-foreground rounded-lg text-[13px] font-medium flex items-center gap-2 hover:opacity-90 transition-opacity w-[calc(100%-24px)]"
         onClick={handleNewSession}
       >
-        <IconPlus size={16} />
+        <span className="text-[16px] font-normal leading-none">+</span>
         开始新旅行
       </button>
 
