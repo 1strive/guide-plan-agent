@@ -72,7 +72,6 @@ export class McpManager {
       }
     }
 
-    this.log?.info({ mcpServers }, 'MCP servers config')
 
     this.client = new MultiServerMCPClient({
       throwOnLoadError: false,

@@ -203,6 +203,13 @@ export class RunManager {
 
     // Task 4.4:MCP 工具列表由 McpManager 提供,运行时动态发现
     const tools = this.mcpManager.getTools()
+
+
+    handle.log.info(
+      { tools: tools.map(t => ({ name: t.name, description: t.description, schema: t.schema })), messages },
+      'run started JA'
+    )
+
     const generator = runLangGraphAgent(
       this.config,
       tools,
@@ -212,6 +219,7 @@ export class RunManager {
       undefined,
       agentOptions
     )
+
 
     // fire-and-forget;pump 内部 catch 异常
     this.pumpRun(handle, generator).catch((err) => {

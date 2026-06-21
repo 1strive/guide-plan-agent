@@ -88,7 +88,6 @@ export async function* runLangGraphAgent(
       model: config.OPENAI_MODEL,
       tools,
       systemPrompt,
-      checkpointer,
       otherMsgs,
       stream
     },
