@@ -19,10 +19,12 @@ export enum EventType {
     TOOL_CALL_ARGS = 'TOOL_CALL_ARGS',
     TOOL_CALL_END = 'TOOL_CALL_END',
     TOOL_CALL_RESULT = 'TOOL_CALL_RESULT',
-    // Task 4.1:思考过程独立化(MiniMax 等模型把 <think>...</think> 内联 content 时,adapter 拆出来发独立事件)
+    // Task 4.1：思考过程独立化(MiniMax 等模型把 <think>...</think> 内联 content 时,adapter 拆出来发独立事件)
     THINKING_START = 'THINKING_START',
     THINKING_CONTENT = 'THINKING_CONTENT',
     THINKING_END = 'THINKING_END',
+    // ASK_USER：Agent 主动向用户提问（独立一等事件，替代 RUN_FINISHED.outcome.interrupt 携带问题数据）
+    ASK_USER = 'ASK_USER',
 }
 
 // ─── Base Event ───
@@ -129,9 +131,9 @@ export type ToolCallResultEvent = BaseEvent & {
     role?: 'tool'
 }
 
-// ─── Thinking Events(Task 4.1) ───
-// 跟 TextMessage 完全平行:模型 reasoning 过程作为独立事件流,前端可折叠显示。
-// messageId 跟同轮的 TextMessage 不同 id;同 runId 内可能出现多次 START/END 对(交错)。
+// ─── Thinking Events（Task 4.1）───
+// 跟 TextMessage 完全平行：模型 reasoning 过程作为独立事件流，前端可折叠显示。
+// messageId 跟同轮的 TextMessage 不同 id；同 runId 内可能出现多次 START/END 对（交错）。
 export type ThinkingStartEvent = BaseEvent & {
     type: EventType.THINKING_START
     messageId: string
@@ -146,6 +148,20 @@ export type ThinkingContentEvent = BaseEvent & {
 export type ThinkingEndEvent = BaseEvent & {
     type: EventType.THINKING_END
     messageId: string
+}
+
+// ─── ASK_USER Event ───
+// Agent 主动向用户提问：携带问题文本和可选选项，前端据此渲染 AskCard。
+// 紧跟其后会有 RUN_FINISHED(outcome='interrupt') 标志 Run 挂起。
+export type AskUserEvent = BaseEvent & {
+    type: EventType.ASK_USER
+    messageId: string
+    questions: Array<{
+        id: string
+        message: string
+        reason: string
+        options?: string[]
+    }>
 }
 
 // ─── Event Union ───
@@ -165,6 +181,7 @@ export type AgUiEvent =
     | ThinkingStartEvent
     | ThinkingContentEvent
     | ThinkingEndEvent
+    | AskUserEvent
 
 // ─── 事件构造辅助函数 ───
 const ts = () => Date.now()
@@ -259,5 +276,13 @@ export function createThinkingContent(messageId: string, delta: string): Thinkin
 
 export function createThinkingEnd(messageId: string): ThinkingEndEvent {
     return { type: EventType.THINKING_END, messageId, timestamp: ts() }
+}
+
+// ─── ASK_USER 构造器 ───
+export function createAskUser(
+    messageId: string,
+    questions: AskUserEvent['questions']
+): AskUserEvent {
+    return { type: EventType.ASK_USER, messageId, questions, timestamp: ts() }
 }
 

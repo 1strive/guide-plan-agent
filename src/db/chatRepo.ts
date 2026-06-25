@@ -3,8 +3,8 @@ import type { DbPool } from './pool.js'
 
 export type ChatRole = 'user' | 'assistant' | 'system'
 
-export async function createSession(pool: DbPool, id: string): Promise<void> {
-  await pool.query('INSERT INTO chat_sessions (id) VALUES (?)', [id])
+export async function createSession(pool: DbPool, id: string, title = '新的旅程'): Promise<void> {
+  await pool.query('INSERT INTO chat_sessions (id, title) VALUES (?, ?)', [id, title])
 }
 
 export async function sessionExists(pool: DbPool, id: string): Promise<boolean> {

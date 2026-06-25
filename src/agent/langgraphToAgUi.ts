@@ -38,7 +38,8 @@ import {
   createThinkingStart,
   createThinkingContent,
   createThinkingEnd,
-  createInterrupt
+  createInterrupt,
+  createAskUser
 } from './ag-ui.js'
 import type { TokenUsage } from './token-usage.js'
 // Task 4.1.A:think 标签跨 chunk 切分状态机
@@ -238,9 +239,9 @@ export async function* translateLangGraphStream(
           // usage 提取:LangChain 把它放在 output.usage_metadata 或 output.response_metadata.usage
           const output = data.output as
             | {
-                usage_metadata?: { input_tokens?: number; output_tokens?: number; total_tokens?: number }
-                response_metadata?: { usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } }
-              }
+              usage_metadata?: { input_tokens?: number; output_tokens?: number; total_tokens?: number }
+              response_metadata?: { usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } }
+            }
             | undefined
           const usage = output?.usage_metadata ?? output?.response_metadata?.usage
           if (usage) {
@@ -344,6 +345,14 @@ export async function* translateLangGraphStream(
       metadata: askResult.options.length > 0 ? { options: askResult.options } : undefined
     })
     outcome = { type: 'interrupt', interrupts: [interrupt] }
+
+    // 发射独立 ASK_USER 事件，携带问题数据供前端渲染
+    yield createAskUser(randomUUID(), [{
+      id: interrupt.id,
+      message: askResult.question,
+      reason: 'input_required',
+      options: askResult.options.length > 0 ? askResult.options : undefined,
+    }])
   }
 
   yield createRunFinished(ctx.threadId, ctx.runId, outcome, totalUsage, Array.from(ctx.sourceMap.values()))

@@ -39,7 +39,7 @@ function AssistantBubble({
         <div className="text-xs font-semibold text-muted-foreground mb-2">
           路书
         </div>
-        {msg.interrupt && (
+        {msg.interrupt && !msg.interrupt.selectedAnswer && (
           <div className="inline-block px-3 py-1.5 rounded-lg bg-accent text-accent-foreground text-xs font-semibold mb-3 shadow-mist">
             需要补充信息
           </div>

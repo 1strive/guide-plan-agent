@@ -6,6 +6,7 @@ import {
   IconLocation,
   IconMic,
   IconSend,
+  IconStop,
 } from "../components/Icons";
 
 export function InputBar() {
@@ -14,7 +15,6 @@ export function InputBar() {
   const sending = useChatStore((s) => s.sending);
   const activeId = useChatStore((s) => s.activeId);
   const pendingInterrupt = useChatStore((s) => s.pendingInterrupt);
-  const currentRunId = useChatStore((s) => s.currentRunId);
   const { handleSend, handleStop } = useStreamChat();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -27,7 +27,10 @@ export function InputBar() {
 
   function doSend() {
     if (pendingInterrupt) {
-      handleSend({ id: pendingInterrupt.id, reason: pendingInterrupt.reason });
+      const firstQ = pendingInterrupt.questions[0];
+      if (firstQ) {
+        handleSend({ id: firstQ.id, reason: firstQ.reason });
+      }
     } else {
       handleSend();
     }
@@ -56,12 +59,12 @@ export function InputBar() {
             onKeyDown={handleKeyDown}
             placeholder={
               pendingInterrupt
-                ? `请回答：${pendingInterrupt.message}`
+                ? `请回答：${pendingInterrupt.questions[0]?.message ?? ""}`
                 : activeId
                   ? "继续聊…"
                   : "请先创建会话"
             }
-            disabled={!activeId || sending}
+            disabled={!activeId}
             rows={1}
             className="w-full px-5 pt-4 pb-2 border-none outline-none resize-none text-[14px] leading-relaxed bg-transparent min-h-[52px] max-h-[160px] text-foreground placeholder:text-muted-foreground disabled:opacity-60 disabled:cursor-not-allowed"
           />
@@ -88,23 +91,24 @@ export function InputBar() {
               <IconMic size={18} />
             </button>
             <div className="flex-1" />
-            {sending && currentRunId && (
+            {sending ? (
               <button
-                className="px-3 h-9 rounded-lg text-[12px] font-medium text-muted-foreground hover:bg-surface-alt hover:text-foreground transition-colors"
+                className="w-9 h-9 rounded-lg bg-destructive text-destructive-foreground grid place-items-center hover:opacity-80 transition-colors shadow-mist"
                 onClick={handleStop}
-                title="主动停止当前 Run"
+                title="中断"
               >
-                停止
+                <IconStop size={14} />
+              </button>
+            ) : (
+              <button
+                className="w-9 h-9 rounded-lg bg-primary text-primary-foreground grid place-items-center hover:bg-accent-hover disabled:bg-border disabled:cursor-default transition-colors shadow-mist"
+                onClick={doSend}
+                disabled={!canSend}
+                title="发送"
+              >
+                <IconSend size={16} />
               </button>
             )}
-            <button
-              className="w-9 h-9 rounded-lg bg-primary text-primary-foreground grid place-items-center hover:bg-accent-hover disabled:bg-border disabled:cursor-default transition-colors shadow-mist"
-              onClick={doSend}
-              disabled={!canSend}
-              title="发送"
-            >
-              <IconSend size={16} />
-            </button>
           </div>
         </div>
         <div className="text-center text-[11px] text-muted-foreground mt-3">

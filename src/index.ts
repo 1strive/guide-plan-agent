@@ -26,7 +26,7 @@ import { detectInjection, wrapUntrusted, detectSystemLeak } from './agent/saniti
 import { RunManager } from './agent/runManager.js'
 import { McpManager } from './mcp/client.js'
 import { getSessionSummary } from './db/chatRepo.js'
-import { getRunById } from './db/runRepo.js'
+import { getRunById, getLastRunBySession, queryArchivedEventsAfter } from './db/runRepo.js'
 import { createRedis, closeRedis } from './redis/pool.js'
 import type { AgUiEvent } from './agent/ag-ui.js'
 import { EventType, type RunFinishedEvent, type TextMessageContentEvent } from './agent/ag-ui.js'
@@ -123,6 +123,7 @@ async function main() {
   })
 
   // Task 整合-2:返回 status 字段;running 时前端据此发起续订
+  // 新增：若最近 Run 状态为 interrupted，解析 [ASK_USER] 并返回 pendingInterrupt + thinking
   app.get<{ Params: { id: string } }>(
     '/sessions/:id/messages',
     async (req, reply) => {
@@ -133,7 +134,57 @@ async function main() {
       }
       const messages = await getSessionMessages(pool, req.params.id)
       const status = (await getSessionStatus(pool, req.params.id)) ?? 'end'
-      return { messages, status }
+
+      // 检测是否处于 interrupted 状态，若是则解析最后一条 assistant 消息中的 [ASK_USER]
+      let pendingInterrupt: {
+        questions: Array<{ id: string; message: string; reason: string; options?: string[] }>
+      } | null = null
+
+      const lastRun = await getLastRunBySession(pool, req.params.id)
+      if (lastRun && lastRun.status === 'interrupted') {
+        const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant')
+        if (lastAssistant) {
+          const parsed = parseAskUserContent(lastAssistant.content)
+          if (parsed) {
+            pendingInterrupt = {
+              questions: [{
+                id: lastRun.runId,
+                message: parsed.question,
+                reason: 'input_required',
+                options: parsed.options.length > 0 ? parsed.options : undefined,
+              }]
+            }
+          }
+        }
+      }
+
+      // 从归档事件中提取 thinking 数据，附加到最后一条 assistant 消息
+      let lastThinking: string | undefined
+      if (lastRun) {
+        try {
+          const archivedEvents = await queryArchivedEventsAfter(pool, lastRun.runId, 0)
+          let thinkingAccum = ''
+          for (const row of archivedEvents) {
+            const ev = row.eventJson as { type?: string; delta?: string }
+            if (ev.type === 'THINKING_CONTENT' && ev.delta) {
+              thinkingAccum += ev.delta
+            }
+          }
+          if (thinkingAccum) lastThinking = thinkingAccum
+        } catch {
+          // 归档查询失败不阻断主流程
+        }
+      }
+
+      // 构建带 thinking 的响应消息
+      const enrichedMessages = messages.map((m, i) => {
+        if (lastThinking && m.role === 'assistant' && i === messages.length - 1) {
+          return { role: m.role, content: m.content, thinking: lastThinking }
+        }
+        return { role: m.role, content: m.content }
+      })
+
+      return { messages: enrichedMessages, status, pendingInterrupt }
     }
   )
 
@@ -163,6 +214,33 @@ async function main() {
       await deleteSession(pool, req.params.id)
       reply.status(204)
       return null
+    }
+  )
+
+  /**
+   * 批量删除会话
+   * - 遍历 ids,逐个 cancel 活跃 Run 后硬删除
+   * - 跳过不存在的 id(幂等)
+   */
+  app.delete<{ Body: { ids: string[] } }>(
+    '/sessions/batch',
+    async (req, reply) => {
+      const { ids } = req.body || {}
+      if (!Array.isArray(ids) || ids.length === 0) {
+        reply.status(400)
+        return { error: 'ids required (non-empty array)' }
+      }
+      let deleted = 0
+      for (const id of ids) {
+        const exists = await sessionExists(pool, id)
+        if (!exists) continue
+        const active = await runManager.getActiveBySession(id)
+        if (active) await runManager.cancel(active.runId)
+        await deleteSession(pool, id)
+        deleted++
+      }
+      reply.status(200)
+      return { deleted }
     }
   )
 
@@ -446,6 +524,34 @@ function writeSseEvent(reply: import('fastify').FastifyReply, event: unknown): v
   } catch {
     /* socket closed */
   }
+}
+
+/**
+ * 解析 assistant content 中的 [ASK_USER] 格式
+ * 格式: "\n\n[ASK_USER]\n问题内容\n【选项】\n1. 选项A\n2. 选项B\n..."
+ * 返回 { question, options } 或 null（不含 [ASK_USER] 前缀）
+ */
+function parseAskUserContent(content: string): { question: string; options: string[] } | null {
+  const marker = '[ASK_USER]'
+  const idx = content.indexOf(marker)
+  if (idx === -1) return null
+
+  const afterMarker = content.slice(idx + marker.length).trim()
+  const optionMarker = '【选项】'
+  const optIdx = afterMarker.indexOf(optionMarker)
+
+  if (optIdx === -1) {
+    return { question: afterMarker, options: [] }
+  }
+
+  const question = afterMarker.slice(0, optIdx).trim()
+  const optionsBlock = afterMarker.slice(optIdx + optionMarker.length).trim()
+  const options = optionsBlock
+    .split('\n')
+    .map(line => line.replace(/^\d+\.\s*/, '').trim())
+    .filter(Boolean)
+
+  return { question, options }
 }
 
 main().catch((err) => {

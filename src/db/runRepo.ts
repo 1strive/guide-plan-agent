@@ -98,6 +98,27 @@ export async function getRunById(
 }
 
 /**
+ * 查指定 session 最近一次 Run（任意状态）
+ * 用于 GET /sessions/:id/messages 检测是否处于 interrupted 状态
+ */
+export async function getLastRunBySession(
+  pool: DbPool,
+  sessionId: string
+): Promise<AgentRunRow | null> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT run_id AS runId, session_id AS sessionId, status,
+            started_at AS startedAt, finished_at AS finishedAt,
+            last_event_seq AS lastEventSeq, total_tokens AS totalTokens
+     FROM agent_runs
+     WHERE session_id = ?
+     ORDER BY started_at DESC
+     LIMIT 1`,
+    [sessionId]
+  )
+  return (rows[0] as AgentRunRow | undefined) ?? null
+}
+
+/**
  * 查指定 session 最近的"未完成" Run(status in 活跃集合);
  * 用于 GET /sessions/:id/runs/active —— 前端打开会话时判断是否需要续订
  */

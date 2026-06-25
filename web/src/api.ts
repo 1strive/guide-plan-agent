@@ -1,6 +1,14 @@
-import type { SessionItem, ChatMsgItem, SessionStatus, AgentRunRow, ResumeItem, AgUiEvent } from './types'
+import type { SessionItem, ChatMsgItem, SessionStatus, AgentRunRow, ResumeItem, AgUiEvent, InterruptQuestion } from './types'
 
 export type { SessionItem, ChatMsgItem, SessionStatus, AgentRunRow, ResumeItem, AgUiEvent }
+
+export type SessionMessagesResponse = {
+  messages: ChatMsgItem[]
+  status: SessionStatus
+  pendingInterrupt: {
+    questions: InterruptQuestion[]
+  } | null
+}
 
 const BASE = '/api'
 
@@ -21,6 +29,18 @@ export async function deleteSession(sessionId: string) {
   }
 }
 
+export async function batchDeleteSessions(ids: string[]) {
+  const res = await fetch(`${BASE}/sessions/batch`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  })
+  if (!res.ok) {
+    throw new Error(`batch delete failed: ${res.status}`)
+  }
+  return res.json() as Promise<{ deleted: number }>
+}
+
 export async function listSessions() {
   const res = await fetch(`${BASE}/sessions`)
   return res.json() as Promise<{ sessions: SessionItem[] }>
@@ -28,7 +48,7 @@ export async function listSessions() {
 
 export async function getSessionMessages(sessionId: string) {
   const res = await fetch(`${BASE}/sessions/${sessionId}/messages`)
-  return res.json() as Promise<{ messages: ChatMsgItem[]; status: SessionStatus }>
+  return res.json() as Promise<SessionMessagesResponse>
 }
 
 export async function getActiveRun(sessionId: string) {

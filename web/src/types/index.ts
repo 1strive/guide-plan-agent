@@ -14,6 +14,7 @@ export type SessionItem = {
 export type ChatMsgItem = {
   role: 'user' | 'assistant' | 'system'
   content: string
+  thinking?: string
 }
 
 export type SessionStatus = 'running' | 'end'
@@ -46,11 +47,22 @@ export type ToolCallInfo = {
   status: 'running' | 'done'
 }
 
-export type InterruptInfo = {
+/** 单条中断问题（对应后端 Interrupt 对象） */
+export type InterruptQuestion = {
   id: string
   message: string
   reason: string
   options?: string[]
+}
+
+/**
+ * 中断信息聚合：支持多问题纵向展开
+ * - 未回答：questions 全部展示选项
+ * - 已回答：仅显示 selectedAnswer
+ */
+export type InterruptInfo = {
+  questions: InterruptQuestion[]
+  selectedAnswer?: string
 }
 
 export type ChatMsg = {

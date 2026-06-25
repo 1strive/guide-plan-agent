@@ -4,11 +4,12 @@ import {
   useSessionsQuery,
   useCreateSession,
   useDeleteSession,
+  useBatchDeleteSessions,
 } from "../query/useSessionQuery";
 import { useStreamChat } from "../hooks/useStreamChat";
 import { IconSearch, IconRoute } from "./Icons";
 import * as api from "../api";
-import type { SessionItem, ChatMsg } from "../types";
+import type { SessionItem, ChatMsg, InterruptInfo } from "../types";
 
 function groupSessionsByTime(sessions: SessionItem[]) {
   const today = new Date();
@@ -40,8 +41,11 @@ export function Sidebar() {
   const activeId = useChatStore((s) => s.activeId);
   const createSession = useCreateSession();
   const deleteSession = useDeleteSession();
+  const batchDelete = useBatchDeleteSessions();
   const { startResume } = useStreamChat();
   const [search, setSearch] = useState("");
+  const [batchMode, setBatchMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const filtered = search
     ? sessions.filter((s) =>
@@ -68,14 +72,24 @@ export function Sidebar() {
 
     let initialMessages: ChatMsg[] = [];
     let status: api.SessionStatus = "end";
+    let pendingInterrupt: {
+      questions: Array<{
+        id: string;
+        message: string;
+        reason: string;
+        options?: string[];
+      }>;
+    } | null = null;
     try {
       const data = await api.getSessionMessages(id);
       status = data.status;
+      pendingInterrupt = data.pendingInterrupt;
       initialMessages = data.messages
         .filter((m) => m.role === "user" || m.role === "assistant")
         .map((m) => ({
           role: m.role as "user" | "assistant",
           content: m.content,
+          thinking: m.thinking || undefined,
         }));
     } catch {
       initialMessages = [];
@@ -103,7 +117,30 @@ export function Sidebar() {
       }
     }
 
-    store.setMessages(initialMessages);
+    // 若后端返回 pendingInterrupt，重建中断 UI 状态
+    if (pendingInterrupt && pendingInterrupt.questions.length > 0) {
+      const interrupt: InterruptInfo = {
+        questions: pendingInterrupt.questions,
+      };
+      // 清理最后一条 assistant 消息中的 [ASK_USER] 前缀，只保留问题文本
+      const lastIdx = initialMessages.length - 1;
+      if (lastIdx >= 0 && initialMessages[lastIdx]!.role === "assistant") {
+        const raw = initialMessages[lastIdx]!.content;
+        const marker = "[ASK_USER]";
+        const markerIdx = raw.indexOf(marker);
+        const displayContent =
+          markerIdx !== -1 ? (interrupt.questions[0]?.message ?? "") : raw;
+        initialMessages[lastIdx] = {
+          role: "assistant",
+          content: displayContent,
+          interrupt,
+        };
+      }
+      store.setMessages(initialMessages);
+      store.setPendingInterrupt(interrupt);
+    } else {
+      store.setMessages(initialMessages);
+    }
   }
 
   async function handleDeleteSession(id: string, e: React.MouseEvent) {
@@ -120,6 +157,47 @@ export function Sidebar() {
       store.setSending(false);
     }
     await deleteSession.mutateAsync(id);
+  }
+
+  function toggleSelect(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    if (selected.size === filtered.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(filtered.map((s) => s.id)));
+    }
+  }
+
+  async function handleBatchDelete() {
+    if (selected.size === 0) return;
+    if (
+      !confirm(`确定要删除选中的 ${selected.size} 个会话吗？该操作不可恢复。`)
+    )
+      return;
+
+    const store = useChatStore.getState();
+    if (activeId && selected.has(activeId)) {
+      store.abortInFlight();
+      store.setActiveId(null);
+      store.resetChat();
+      store.setSending(false);
+    }
+    await batchDelete.mutateAsync([...selected]);
+    setSelected(new Set());
+    setBatchMode(false);
+  }
+
+  function exitBatchMode() {
+    setBatchMode(false);
+    setSelected(new Set());
   }
 
   return (
@@ -163,6 +241,45 @@ export function Sidebar() {
         />
       </div>
 
+      {/* Batch mode toolbar */}
+      {batchMode ? (
+        <div className="mx-3 mb-2 flex items-center gap-2">
+          <button
+            className="text-[12px] text-sidebar-fg/80 hover:text-sidebar-fg transition-colors"
+            onClick={toggleSelectAll}
+          >
+            {selected.size === filtered.length ? "取消全选" : "全选"}
+          </button>
+          <span className="text-[11px] text-sidebar-muted flex-1">
+            已选 {selected.size} 项
+          </span>
+          <button
+            className="text-[12px] px-2 py-1 rounded bg-red-500/90 text-white hover:bg-red-400 transition-colors disabled:opacity-40"
+            onClick={handleBatchDelete}
+            disabled={selected.size === 0}
+          >
+            删除
+          </button>
+          <button
+            className="text-[12px] text-sidebar-muted hover:text-sidebar-fg transition-colors"
+            onClick={exitBatchMode}
+          >
+            取消
+          </button>
+        </div>
+      ) : (
+        filtered.length > 0 && (
+          <div className="mx-3 mb-2 flex justify-end">
+            <button
+              className="text-[11px] text-sidebar-muted hover:text-sidebar-fg transition-colors"
+              onClick={() => setBatchMode(true)}
+            >
+              批量管理
+            </button>
+          </div>
+        )
+      )}
+
       {/* Session list */}
       <div className="flex-1 overflow-y-auto py-2 sidebar-scroll">
         {filtered.length === 0 && (
@@ -172,12 +289,7 @@ export function Sidebar() {
         )}
         {groups.map((group, groupIdx) => (
           <div key={group.label} className="flex flex-col gap-0.5">
-            <div
-              className={
-                "px-5 pb-1 " +
-                (groupIdx === 0 ? "pt-2" : "pt-3")
-              }
-            >
+            <div className={"px-5 pb-1 " + (groupIdx === 0 ? "pt-2" : "pt-3")}>
               <span className="text-[11px] font-bold text-sidebar-muted">
                 {group.label}
               </span>
@@ -185,22 +297,34 @@ export function Sidebar() {
             {group.items.map((s) => {
               const active = s.id === activeId;
               const displayTitle = s.title || s.id.slice(0, 8) + "…";
+              const isSelected = selected.has(s.id);
               return (
                 <div
                   key={s.id}
                   className={
                     "group flex items-start gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer transition-colors relative " +
-                    (active ? "bg-sidebar-active" : "hover:bg-sidebar-hover")
+                    (active ? "bg-sidebar-active" : "hover:bg-sidebar-hover") +
+                    (isSelected && batchMode ? " ring-1 ring-red-400/60" : "")
                   }
-                  onClick={() => switchSession(s.id)}
+                  onClick={() =>
+                    batchMode ? toggleSelect(s.id) : switchSession(s.id)
+                  }
                 >
-                  <IconRoute
-                    size={16}
-                    className={
-                      "mt-0.5 flex-shrink-0 " +
-                      (active ? "text-sidebar-primary" : "text-sidebar-muted")
-                    }
-                  />
+                  {batchMode ? (
+                    <span className="mt-0.5 flex-shrink-0 w-4 h-4 rounded border border-sidebar-muted flex items-center justify-center">
+                      {isSelected && (
+                        <span className="w-2.5 h-2.5 rounded-sm bg-red-400" />
+                      )}
+                    </span>
+                  ) : (
+                    <IconRoute
+                      size={16}
+                      className={
+                        "mt-0.5 flex-shrink-0 " +
+                        (active ? "text-sidebar-primary" : "text-sidebar-muted")
+                      }
+                    />
+                  )}
                   <div className="flex-1 min-w-0 pr-5">
                     <div
                       className="text-[13px] font-medium truncate leading-snug text-sidebar-fg"
@@ -212,14 +336,16 @@ export function Sidebar() {
                       {s.lastMessage?.trim() || "暂无消息"}
                     </div>
                   </div>
-                  <button
-                    className="absolute top-2.5 right-3 w-5 h-5 inline-flex items-center justify-center rounded text-sidebar-muted opacity-0 group-hover:opacity-100 transition-all hover:bg-destructive hover:text-destructive-foreground text-xs"
-                    onClick={(e) => handleDeleteSession(s.id, e)}
-                    title="删除会话"
-                    aria-label="删除会话"
-                  >
-                    ×
-                  </button>
+                  {!batchMode && (
+                    <button
+                      className="absolute top-2.5 right-3 w-5 h-5 inline-flex items-center justify-center rounded text-red-400 opacity-0 group-hover:opacity-100 transition-all hover:bg-red-500 hover:text-white text-xs"
+                      onClick={(e) => handleDeleteSession(s.id, e)}
+                      title="删除会话"
+                      aria-label="删除会话"
+                    >
+                      ×
+                    </button>
+                  )}
                 </div>
               );
             })}
