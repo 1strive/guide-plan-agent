@@ -1,13 +1,13 @@
-import type { SessionItem, ChatMsgItem, SessionStatus, AgentRunRow, ResumeItem, AgUiEvent, InterruptQuestion } from './types'
+import type { SessionItem, ChatMsgItem, SessionStatus, AgentRunRow, ResumeItem, AgUiEvent } from './types'
 
 export type { SessionItem, ChatMsgItem, SessionStatus, AgentRunRow, ResumeItem, AgUiEvent }
 
+/** GET /sessions/:id/messages 响应 — AG-UI 协议统一解析 */
 export type SessionMessagesResponse = {
   messages: ChatMsgItem[]
   status: SessionStatus
-  pendingInterrupt: {
-    questions: InterruptQuestion[]
-  } | null
+  /** 最近一次 Run 的原始 AG-UI 事件流（前端用 reduceAgUiEvents 统一归约） */
+  lastRunEvents: AgUiEvent[] | null
 }
 
 const BASE = '/api'

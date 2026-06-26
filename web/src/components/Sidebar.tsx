@@ -7,9 +7,10 @@ import {
   useBatchDeleteSessions,
 } from "../query/useSessionQuery";
 import { useStreamChat } from "../hooks/useStreamChat";
+import { reduceAgUiEvents } from "../hooks/reduceAgUiEvents";
 import { IconSearch, IconRoute } from "./Icons";
 import * as api from "../api";
-import type { SessionItem, ChatMsg, InterruptInfo } from "../types";
+import type { SessionItem, ChatMsg } from "../types";
 
 function groupSessionsByTime(sessions: SessionItem[]) {
   const today = new Date();
@@ -72,24 +73,16 @@ export function Sidebar() {
 
     let initialMessages: ChatMsg[] = [];
     let status: api.SessionStatus = "end";
-    let pendingInterrupt: {
-      questions: Array<{
-        id: string;
-        message: string;
-        reason: string;
-        options?: string[];
-      }>;
-    } | null = null;
+    let lastRunEvents: api.AgUiEvent[] | null = null;
     try {
       const data = await api.getSessionMessages(id);
       status = data.status;
-      pendingInterrupt = data.pendingInterrupt;
+      lastRunEvents = data.lastRunEvents;
       initialMessages = data.messages
         .filter((m) => m.role === "user" || m.role === "assistant")
         .map((m) => ({
           role: m.role as "user" | "assistant",
           content: m.content,
-          thinking: m.thinking || undefined,
         }));
     } catch {
       initialMessages = [];
@@ -117,27 +110,22 @@ export function Sidebar() {
       }
     }
 
-    // 若后端返回 pendingInterrupt，重建中断 UI 状态
-    if (pendingInterrupt && pendingInterrupt.questions.length > 0) {
-      const interrupt: InterruptInfo = {
-        questions: pendingInterrupt.questions,
-      };
-      // 清理最后一条 assistant 消息中的 [ASK_USER] 前缀，只保留问题文本
+    // AG-UI 协议统一解析：用 reduceAgUiEvents 归约最后一次 Run 的事件流
+    if (lastRunEvents && lastRunEvents.length > 0) {
+      const { message: lastAssistantMsg, pendingInterrupt } =
+        reduceAgUiEvents(lastRunEvents);
+
       const lastIdx = initialMessages.length - 1;
       if (lastIdx >= 0 && initialMessages[lastIdx]!.role === "assistant") {
-        const raw = initialMessages[lastIdx]!.content;
-        const marker = "[ASK_USER]";
-        const markerIdx = raw.indexOf(marker);
-        const displayContent =
-          markerIdx !== -1 ? (interrupt.questions[0]?.message ?? "") : raw;
-        initialMessages[lastIdx] = {
-          role: "assistant",
-          content: displayContent,
-          interrupt,
-        };
+        initialMessages[lastIdx] = lastAssistantMsg;
+      } else {
+        initialMessages.push(lastAssistantMsg);
       }
+
       store.setMessages(initialMessages);
-      store.setPendingInterrupt(interrupt);
+      if (pendingInterrupt) {
+        store.setPendingInterrupt(pendingInterrupt);
+      }
     } else {
       store.setMessages(initialMessages);
     }
@@ -146,7 +134,7 @@ export function Sidebar() {
   async function handleDeleteSession(id: string, e: React.MouseEvent) {
     e.stopPropagation();
     const session = sessions.find((s) => s.id === id);
-    const title = session?.title || id.slice(0, 8) + "…";
+    const title = session?.title || id.slice(0, 8) + "\u2026";
     if (!confirm(`确定要删除会话「${title}」吗?该操作不可恢复。`)) return;
 
     if (id === activeId) {
@@ -296,7 +284,7 @@ export function Sidebar() {
             </div>
             {group.items.map((s) => {
               const active = s.id === activeId;
-              const displayTitle = s.title || s.id.slice(0, 8) + "…";
+              const displayTitle = s.title || s.id.slice(0, 8) + "\u2026";
               const isSelected = selected.has(s.id);
               return (
                 <div

@@ -14,7 +14,6 @@ export type SessionItem = {
 export type ChatMsgItem = {
   role: 'user' | 'assistant' | 'system'
   content: string
-  thinking?: string
 }
 
 export type SessionStatus = 'running' | 'end'
