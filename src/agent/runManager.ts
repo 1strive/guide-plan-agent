@@ -30,7 +30,7 @@ import type { DbPool } from '../db/pool.js'
 import type { AgUiEvent } from './ag-ui.js'
 import { EventType, type RunFinishedEvent, type TextMessageContentEvent } from './ag-ui.js'
 import type { ChatMessage, TokenUsage } from './llm.js'
-import { runLangGraphAgent } from './langgraph-agent.js'
+import { runLangGraphAgent, resumeLangGraphAgent } from './langgraph-agent.js'
 import { maybeUpdateMemory } from './memory.js'
 // Task 4.4:MCP 工具管理器
 import type { McpManager } from '../mcp/client.js'
@@ -216,7 +216,6 @@ export class RunManager {
       messages,
       sessionId,
       runId,
-      undefined,
       agentOptions
     )
 
@@ -312,6 +311,68 @@ export class RunManager {
   /** GET /sessions/:id/runs/active 用 */
   async getActiveBySession(sessionId: string): Promise<AgentRunRow | null> {
     return getActiveRunBySession(this.pool, sessionId)
+  }
+
+  /**
+   * Task 4.5:恢复被 interrupt 暂停的 Run
+   * 用户回复后，通过 Command(resume=answer) 恢复同一 Run
+   */
+  async resume(
+    sessionId: string,
+    runId: string,
+    answer: string,
+    parentLog?: FastifyBaseLogger
+  ): Promise<boolean> {
+    const log: FastifyBaseLogger = (parentLog ?? this.log).child({ runId })
+
+    // 持久化 user 回复消息(记入历史)
+    const handle: RunHandle = {
+      runId,
+      sessionId,
+      status: 'running',
+      seqCounter: 0,
+      subscribers: new Map(),
+      abortController: new AbortController(),
+      currentAssistantMessageId: null,
+      currentAssistantContent: '',
+      totalTokensDelta: 0,
+      log,
+      startedAt: Date.now(),
+      toolStats: { count: 0, names: [] },
+      promptTokensDelta: 0,
+      completionTokensDelta: 0,
+      messages: []
+    }
+    this.runs.set(runId, handle)
+
+    await updateRunStatus(this.pool, runId, 'running')
+    await updateSessionStatus(this.pool, sessionId, 'running')
+
+    const agentOptions = {
+      signal: handle.abortController.signal,
+      onUsage: (u: TokenUsage) => {
+        handle.totalTokensDelta += u.totalTokens
+        handle.promptTokensDelta += u.promptTokens
+        handle.completionTokensDelta += u.completionTokens
+      },
+      log: handle.log
+    }
+
+    const tools = this.mcpManager.getTools()
+    const generator = resumeLangGraphAgent(
+      this.config,
+      tools,
+      sessionId,
+      runId,
+      answer,
+      agentOptions
+    )
+
+    this.pumpRun(handle, generator).catch((err) => {
+      handle.log.error({ err: String(err) }, 'runManager resume pump crashed')
+    })
+
+    return true
   }
 
   /** 用于 handler 判断"该 Run 还活着"决定是否要接实时流 */

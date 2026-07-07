@@ -36,8 +36,8 @@ export type PromptTemplate = {
   outputFormat?: string[]
   // 上下文使用规则:指代消解("按刚才说的")、历史利用、何时总结偏好等
   contextRules?: string[]
-  // 反问规则:含 [ASK_USER] 协议(见 src/agent/llm.ts:parseAskUser),
-  // 教模型在信息不足时主动反问 + 提供【选项】列表
+  // 反问规则:教模型在信息不足时使用 ask_user 工具主动反问 + 提供选项列表
+  // Task 4.5:已从 [ASK_USER] 文本协议改为 LangGraph 原生 interrupt
   clarificationRules?: string[]
   // 安全防御规则(八股 09 §8):防 Prompt 注入指令,告诉模型把可疑文本当数据;
   // 配合 src/agent/sanitize.ts 的入口检测 + <untrusted_user_content> 包裹形成双层防御。

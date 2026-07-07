@@ -230,7 +230,7 @@ async function main() {
 
   /**
    * POST /sessions/:id/runs/:runId/cancel
-   * 用户主动停止 Run;202 Accepted + 幂等
+   * 用户主动停止 Run；202 Accepted + 幂等
    */
   app.post<{ Params: { id: string; runId: string } }>(
     '/sessions/:id/runs/:runId/cancel',
@@ -245,6 +245,79 @@ async function main() {
       return { cancelled }
     }
   )
+
+  /**
+   * Task 4.5: POST /sessions/:id/runs/:runId/resume
+   * 用户回复 interrupt 反问，恢复暂停的 Run
+   * 通过 Command(resume=answer) 从 checkpoint 恢复图执行
+   */
+  app.post<{
+    Params: { id: string; runId: string }
+    Body: { answer: string }
+  }>('/sessions/:id/runs/:runId/resume', async (req, reply) => {
+    const { answer } = req.body || {}
+    if (!answer || typeof answer !== 'string' || !answer.trim()) {
+      reply.status(400)
+      return { error: 'answer required (non-empty string)' }
+    }
+    const run = await getRunById(pool, req.params.runId)
+    if (!run || run.sessionId !== req.params.id) {
+      reply.status(404)
+      return { error: 'run not found' }
+    }
+    if (run.status !== 'interrupted') {
+      reply.status(409)
+      return { error: `run is not interrupted (current status: ${run.status})` }
+    }
+
+    const sessionId = req.params.id
+    const runId = req.params.runId
+    const reqLog = req.log.child({ sessionId, runId })
+
+    // 持久化用户回复
+    await insertMessage(pool, sessionId, 'user', answer.trim())
+
+    // 恢复 Run
+    await runManager.resume(sessionId, runId, answer.trim(), reqLog)
+    reqLog.info({ runId }, 'run resumed')
+
+    // SSE 接管（与 stream 路由类似）
+    reply.hijack()
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      'X-Trace-Id': runId
+    })
+    const heartbeat = setInterval(() => {
+      try {
+        reply.raw.write(': ping\n\n')
+      } catch {
+        /* socket 已关 */
+      }
+    }, 15_000)
+
+    const unsubscribe = await runManager.subscribe(
+      runId,
+      (event) => writeSseEvent(reply, event),
+      () => {
+        clearInterval(heartbeat)
+        try {
+          reply.raw.end()
+        } catch {
+          /* ignore */
+        }
+      },
+      0
+    )
+
+    req.raw.once('close', () => {
+      unsubscribe()
+      clearInterval(heartbeat)
+      reqLog.info({ runId }, 'resume subscriber disconnected')
+    })
+  })
 
   /**
    * GET /sessions/:id/runs/:runId/stream?after_seq=N

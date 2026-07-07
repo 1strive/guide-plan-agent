@@ -1,7 +1,7 @@
 /**
- * Task 整合-1 — LangGraph streamEvents v2 → AG-UI 事件翻译器
+ * Task 整合-1 + Task 4.5 — LangGraph streamEvents v2 → AG-UI 事件翻译器
  *
- * 规划:docs/开发规划.md 整合阶段 Task 整合-1
+ * 规划:docs/开发规划.md 整合阶段 Task 整合-1 + Task 4.5
  *
  * 事件映射:
  * - on_chat_model_start    → STEP_STARTED(generating)(首次)
@@ -10,21 +10,20 @@
  * - on_tool_start          → STEP_STARTED(tool_call) + TOOL_CALL_START/ARGS/END
  * - on_tool_end            → STEP_FINISHED(tool_call) + STEP_STARTED(tool_execution)
  *                            + TOOL_CALL_RESULT + STEP_FINISHED(tool_execution)
- * - 流自然结束             → 检测 [ASK_USER] → RUN_FINISHED { outcome, sources, usage }
- * - 流抛错                 → RUN_ERROR + RUN_FINISHED
+ * - 流自然结束             → (caller 负责发 RUN_FINISHED，本层不发)
+ * - 流抛错                 → RUN_ERROR (caller 发 RUN_FINISHED)
  *
- * [ASK_USER] 协议保留(在 adapter 层做 parseAskUser):
- * - 沿用 Task 1.x/2.x 设计,前端 / parseAskUser 解析逻辑不变
- * - Task 4.5 完整版会升级到 LangGraph 原生 interrupt() + Command(resume)
+ * Task 4.5 改造:
+ * - 移除 [ASK_USER] 文本协议解析(parseAskUser)
+ * - 移除 RUN_STARTED/RUN_FINISHED 发射(交给 caller 统一管理)
+ * - 过滤 ask_user 工具的 TOOL_CALL 事件(内部机制，不暴露给前端)
+ * - 通过 streamCtx 向 caller 回传 usage/sources
  */
 
 import { randomUUID } from 'node:crypto'
 import {
   type AgUiEvent,
   type Source,
-  type RunFinishedOutcome,
-  createRunStarted,
-  createRunFinished,
   createRunError,
   createStepStarted,
   createStepFinished,
@@ -37,12 +36,10 @@ import {
   createToolCallResult,
   createThinkingStart,
   createThinkingContent,
-  createThinkingEnd,
-  createInterrupt,
-  createAskUser
+  createThinkingEnd
 } from './ag-ui.js'
 import type { TokenUsage } from './token-usage.js'
-// Task 4.1.A:think 标签跨 chunk 切分状态机
+import type { StreamContext } from './langgraph-agent.js'
 import {
   createThinkSplitState,
   feedThinkSplit,
@@ -50,27 +47,9 @@ import {
   type ThinkSplitState
 } from './thinkSplit.js'
 
-const ASK_USER_PREFIX = '[ASK_USER]'
-const OPTIONS_MARKER = '【选项】'
-
-/** 跟 src/agent/llm.ts:parseAskUser 完全一致(故意 dup,避免 llm.ts 退役后引用悬空) */
-function parseAskUser(text: string): { isAskUser: boolean; question: string; options: string[] } {
-  const trimmed = text.trim()
-  if (!trimmed.startsWith(ASK_USER_PREFIX)) return { isAskUser: false, question: '', options: [] }
-  const body = trimmed.slice(ASK_USER_PREFIX.length).trim()
-  let question = body
-  const options: string[] = []
-  const optIdx = body.indexOf(OPTIONS_MARKER)
-  if (optIdx !== -1) {
-    question = body.slice(0, optIdx).trim()
-    const optBlock = body.slice(optIdx + OPTIONS_MARKER.length).trim()
-    for (const line of optBlock.split('\n')) {
-      const m = line.trim().match(/^\d+[.、]\s*(.+)$/)
-      if (m) options.push(m[1].trim())
-    }
-  }
-  return { isAskUser: true, question: question || '请补充更多信息', options }
-}
+// Task 4.5:移除旧的 [ASK_USER] 文本协议解析，改用 LangGraph 原生 interrupt
+// ask_user 工具的 run_id 跟踪集合（用于过滤内部工具事件）
+const ASK_USER_TOOL_NAME = 'ask_user'
 
 // Task 4.1.B:可选 logger 接口(对齐 pino,只用 info 一层即够;不强依赖 pino,便于单测注入 stub)
 export type AdapterLogger = {
@@ -85,6 +64,8 @@ type Ctx = {
   onUsage?: (usage: TokenUsage, round: number) => void
   // Task 4.1.B:工具调用 timing 日志的输出 logger;未传则 silently 跳过日志
   log?: AdapterLogger
+  // Task 4.5:共享上下文，由 caller 传入，adapter 填充 usage 数据
+  streamCtx?: StreamContext
 }
 
 /**
@@ -111,13 +92,14 @@ export async function* translateLangGraphStream(
   stream: AsyncIterable<LgEvent>,
   ctx: Ctx
 ): AsyncGenerator<AgUiEvent> {
-  yield createRunStarted(ctx.threadId, ctx.runId)
+  // Task 4.5:RUN_STARTED / RUN_FINISHED 由 caller(langgraph-agent.ts)统一发射
+  // 本层只负责翻译中间事件(text/thinking/tool)
 
   // ── 状态机 ──
   // text(对外可见的回答)
   let textStarted = false
   let textMsgId = randomUUID()
-  let fullContent = ''           // 仅累加 text 段(用于流末 [ASK_USER] 检测 — think 内的 [ASK_USER] 不算)
+  let fullContent = ''           // 仅累加 text 段
   // thinking(reasoning 过程,跟 text 平行的事件流)
   let thinkingStarted = false
   let thinkingMsgId = randomUUID()
@@ -266,11 +248,13 @@ export async function* translateLangGraphStream(
         }
 
         case 'on_tool_start': {
+          const toolName = event.name ?? 'unknown_tool'
+          // Task 4.5:过滤 ask_user 工具事件（内部机制，不暴露给前端）
+          if (toolName === ASK_USER_TOOL_NAME) break
           if (!inToolStep) {
             yield createStepStarted('tool_call')
             inToolStep = true
           }
-          const toolName = event.name ?? 'unknown_tool'
           const toolCallId = event.run_id ?? randomUUID()
           const input = data.input
           const args = typeof input === 'string' ? input : JSON.stringify(input ?? {})
@@ -287,6 +271,8 @@ export async function* translateLangGraphStream(
         }
 
         case 'on_tool_end': {
+          // Task 4.5：过滤 ask_user 工具的 end 事件
+          if (event.name === ASK_USER_TOOL_NAME) break
           const toolCallId = event.run_id ?? randomUUID()
           const output = data.output
           const text =
@@ -326,34 +312,15 @@ export async function* translateLangGraphStream(
       }
     }
   } catch (err) {
+    // Task 4.5：错误只 yield RUN_ERROR，RUN_FINISHED 由 caller 负责
     yield createRunError(String(err), 'AGENT_ERROR')
-    yield createRunFinished(
-      ctx.threadId,
-      ctx.runId,
-      undefined,
-      totalUsage,
-      Array.from(ctx.sourceMap.values())
-    )
     return
   }
 
-  // ── 流自然结束 → 检测 [ASK_USER] 反问 ──
-  const askResult = parseAskUser(fullContent)
-  let outcome: RunFinishedOutcome | undefined
-  if (askResult.isAskUser) {
-    const interrupt = createInterrupt('input_required', askResult.question, {
-      metadata: askResult.options.length > 0 ? { options: askResult.options } : undefined
-    })
-    outcome = { type: 'interrupt', interrupts: [interrupt] }
-
-    // 发射独立 ASK_USER 事件，携带问题数据供前端渲染
-    yield createAskUser(randomUUID(), [{
-      id: interrupt.id,
-      message: askResult.question,
-      reason: 'input_required',
-      options: askResult.options.length > 0 ? askResult.options : undefined,
-    }])
+  // Task 4.5：流自然结束 → 将累计 usage 回传给 caller（通过 streamCtx）
+  if (ctx.streamCtx) {
+    ctx.streamCtx.totalUsage.promptTokens += totalUsage.promptTokens
+    ctx.streamCtx.totalUsage.completionTokens += totalUsage.completionTokens
+    ctx.streamCtx.totalUsage.totalTokens += totalUsage.totalTokens
   }
-
-  yield createRunFinished(ctx.threadId, ctx.runId, outcome, totalUsage, Array.from(ctx.sourceMap.values()))
 }

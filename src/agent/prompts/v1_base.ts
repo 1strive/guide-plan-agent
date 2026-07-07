@@ -1,25 +1,26 @@
 /**
- * Task 2.1 — v1_base:基础版提示词(原 SYSTEM_PROMPT 的结构化拆分)
+ * Task 2.1 + Task 4.5 — v1_base:基础版提示词(原 SYSTEM_PROMPT 的结构化拆分)
  *
  * 规划:docs/开发规划.md Task 2.1(把单字符串拆为结构化模板,作为基线版本)
  * 八股:09-Prompt工程.md §1.3 基本结构 / §1.5 综合示例
+ *
+ * Task 4.5 改造:
+ * - 移除 [ASK_USER]/【选项】文本协议，改为 ask_user 工具调用说明
+ * - 反问通过 LangGraph 原生 interrupt 实现，无需文本标记
  *
  * 拆分映射(对照原 src/agent/prompts.ts):
  * - 原首段 → role
  * - 原规则 1~4 → toolUsageRules(工具选择策略)
  * - 原规则 5    → outputFormat(输出格式约束)
  * - 原规则 6    → contextRules(上下文使用)
- * - 原规则 7~8 → clarificationRules(反问 + [ASK_USER] 协议)
- *
- * 重要契约:clarificationRules 中 [ASK_USER]/【选项】两个标记必须保留原文,
- * llm.ts:171 parseAskUser 依赖这两个 magic string 解析中断事件。
+ * - 原规则 7~8 → clarificationRules(反问规则，已改为 ask_user 工具调用)
  */
 
 import type { PromptTemplate } from './types.js'
 
 export const v1Base: PromptTemplate = {
   version: 'v1_base',
-  description: '基础版:角色定义 + 工具选择 + ASK_USER 反问协议',
+  description: '基础版:角色定义 + 工具选择 + ask_user 工具反问',
   role: '你是专业的中文旅游顾问助手。你需要先理解用户需求,再给出可执行、友好的建议。',
   // Task 2.3 第 2 轮迭代:加入示例防污染说明。
   // 第 1 轮评测发现 ask 类 case 失败——模型把 Few-shot prepend messages 当真实历史读,
@@ -45,16 +46,8 @@ export const v1Base: PromptTemplate = {
     '结合会话历史理解省略主语、指代(例如「按刚才说的」),必要时先总结用户偏好再调用工具。'
   ],
   clarificationRules: [
-    '当用户输入信息不足以给出有效建议时(例如只说「推荐个地方」却未说明地区/预算/出行时间/偏好),你必须先反问用户补充关键信息。反问时在回复的最开头加上标记 [ASK_USER],然后写出你的反问内容。反问应该简洁、聚焦,一次最多问 1-2 个关键问题。',
-    `反问时必须提供可选择的选项,格式如下:
-   [ASK_USER]
-   请问您偏好哪种旅行风格?
-   【选项】
-   1. 自然风光
-   2. 人文历史
-   3. 美食之旅
-   4. 休闲度假
-   规则:每个问题提供 2-5 个选项,每个选项简短明确(2-6 字),选项之间不重复。如果没有合适的固定选项,最后一个选项可以是「其他」让用户自由输入。`
+    '当用户输入信息不足以给出有效建议时（例如只说「推荐个地方」却未说明地区/预算/出行时间/偏好），你必须使用 ask_user 工具向用户提问补充关键信息。',
+    '使用 ask_user 工具时，提供简洁聚焦的问题，一次最多问 1-2 个关键问题，并提供 2-5 个简短选项供选择。每个选项简短明确(2-6字)，选项之间不重复。如果没有合适的固定选项，最后一个选项可以是「其他」让用户自由输入。'
   ],
   // 八股 09 §8 Prompt 注入与防御:三条防御指令,配合 src/agent/sanitize.ts 形成双层防御。
   // 规则文字本身不能被 Prompt 注入"反向引用"——这里描述的是模型的应当行为,
@@ -71,13 +64,7 @@ export const v1Base: PromptTemplate = {
   examples: [
     {
       user: '推荐个地方吧',
-      assistant: `[ASK_USER]
-请问您从哪个城市出发?这会影响我能推荐的范围。
-【选项】
-1. 华东地区
-2. 华南地区
-3. 华北地区
-4. 其他`
+      assistant: '我需要了解更多信息才能给您推荐。让我先问您几个问题。'
     },
     {
       user: '我从某城市出发,某天时间,想看某类风景',
@@ -85,13 +72,7 @@ export const v1Base: PromptTemplate = {
     },
     {
       user: '第一个能详细说说吗?',
-      assistant: `[ASK_USER]
-您最关心它的哪一类详情?
-【选项】
-1. 美食
-2. 景点
-3. 文化
-4. 全部`
+      assistant: '让我先确认您最关心的方面，再给您详细介绍。'
     }
   ],
   variables: ['memory_summary']
