@@ -1,11 +1,11 @@
 import { z } from 'zod'
 
 const dbEnvSchema = z.object({
-  MYSQL_HOST: z.string().default('127.0.0.1'),
-  MYSQL_PORT: z.coerce.number().default(3306),
-  MYSQL_USER: z.string().default('root'),
-  MYSQL_PASSWORD: z.string().default(''),
-  MYSQL_DATABASE: z.string().default('guide_plan')
+  PG_HOST: z.string().default('127.0.0.1'),
+  PG_PORT: z.coerce.number().default(5432),
+  PG_USER: z.string().default('postgres'),
+  PG_PASSWORD: z.string().default(''),
+  PG_DATABASE: z.string().default('guide_plan')
 })
 
 /**

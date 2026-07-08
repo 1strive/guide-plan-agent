@@ -11,9 +11,13 @@
  * - agent_run_events 旧表已从 003 migration 中移除(功能由 Redis Stream + archived_run_events 替代)
  * - seq 分配走 runManager 内存 counter(同一 Run 串行 yield 事件,无并发问题)
  * - markAllRunningAsFailed:启动时清理上次进程残留的 running 状态
+ *
+ * PostgreSQL 迁移说明:
+ * - 占位符 ? → $1,$2...;列别名双引号保留驼峰
+ * - INSERT IGNORE → ON CONFLICT (run_id, seq) DO NOTHING
+ * - affectedRows → rowCount;bigint 列(last_event_seq/total_tokens)经 normalizeRunRow 转 Number
  */
 
-import type { RowDataPacket, ResultSetHeader } from 'mysql2'
 import type { DbPool } from './pool.js'
 
 export type AgentRunStatus =
@@ -41,6 +45,24 @@ export type AgentRunEventRow = {
   createdAt: Date
 }
 
+// pg 把 bigint 列(last_event_seq/total_tokens)返回为字符串，统一转 Number
+function normalizeRunRow(row: Record<string, unknown> | undefined): AgentRunRow | null {
+  if (!row) return null
+  return {
+    runId: row.runId as string,
+    sessionId: row.sessionId as string,
+    status: row.status as AgentRunStatus,
+    startedAt: row.startedAt as Date,
+    finishedAt: (row.finishedAt ?? null) as Date | null,
+    lastEventSeq: Number(row.lastEventSeq),
+    totalTokens: Number(row.totalTokens)
+  }
+}
+
+const RUN_COLUMNS = `run_id AS "runId", session_id AS "sessionId", status,
+            started_at AS "startedAt", finished_at AS "finishedAt",
+            last_event_seq AS "lastEventSeq", total_tokens AS "totalTokens"`
+
 // ─── agent_runs ──────────────────────────────────────────────────
 
 export async function createRun(
@@ -50,7 +72,7 @@ export async function createRun(
   status: AgentRunStatus = 'pending'
 ): Promise<void> {
   await pool.query(
-    'INSERT INTO agent_runs (run_id, session_id, status) VALUES (?, ?, ?)',
+    'INSERT INTO agent_runs (run_id, session_id, status) VALUES ($1, $2, $3)',
     [runId, sessionId, status]
   )
 }
@@ -63,11 +85,11 @@ export async function updateRunStatus(
 ): Promise<void> {
   if (setFinishedAt) {
     await pool.query(
-      'UPDATE agent_runs SET status = ?, finished_at = CURRENT_TIMESTAMP WHERE run_id = ?',
+      'UPDATE agent_runs SET status = $1, finished_at = CURRENT_TIMESTAMP WHERE run_id = $2',
       [status, runId]
     )
   } else {
-    await pool.query('UPDATE agent_runs SET status = ? WHERE run_id = ?', [status, runId])
+    await pool.query('UPDATE agent_runs SET status = $1 WHERE run_id = $2', [status, runId])
   }
 }
 
@@ -78,7 +100,7 @@ export async function incrementRunTokens(
 ): Promise<void> {
   if (delta <= 0) return
   await pool.query(
-    'UPDATE agent_runs SET total_tokens = total_tokens + ? WHERE run_id = ?',
+    'UPDATE agent_runs SET total_tokens = total_tokens + $1 WHERE run_id = $2',
     [delta, runId]
   )
 }
@@ -87,14 +109,12 @@ export async function getRunById(
   pool: DbPool,
   runId: string
 ): Promise<AgentRunRow | null> {
-  const [rows] = await pool.query<RowDataPacket[]>(
-    `SELECT run_id AS runId, session_id AS sessionId, status,
-            started_at AS startedAt, finished_at AS finishedAt,
-            last_event_seq AS lastEventSeq, total_tokens AS totalTokens
-     FROM agent_runs WHERE run_id = ? LIMIT 1`,
+  const { rows } = await pool.query(
+    `SELECT ${RUN_COLUMNS}
+     FROM agent_runs WHERE run_id = $1 LIMIT 1`,
     [runId]
   )
-  return (rows[0] as AgentRunRow | undefined) ?? null
+  return normalizeRunRow(rows[0])
 }
 
 /**
@@ -105,17 +125,15 @@ export async function getLastRunBySession(
   pool: DbPool,
   sessionId: string
 ): Promise<AgentRunRow | null> {
-  const [rows] = await pool.query<RowDataPacket[]>(
-    `SELECT run_id AS runId, session_id AS sessionId, status,
-            started_at AS startedAt, finished_at AS finishedAt,
-            last_event_seq AS lastEventSeq, total_tokens AS totalTokens
+  const { rows } = await pool.query(
+    `SELECT ${RUN_COLUMNS}
      FROM agent_runs
-     WHERE session_id = ?
+     WHERE session_id = $1
      ORDER BY started_at DESC
      LIMIT 1`,
     [sessionId]
   )
-  return (rows[0] as AgentRunRow | undefined) ?? null
+  return normalizeRunRow(rows[0])
 }
 
 /**
@@ -126,18 +144,16 @@ export async function getActiveRunBySession(
   pool: DbPool,
   sessionId: string
 ): Promise<AgentRunRow | null> {
-  const [rows] = await pool.query<RowDataPacket[]>(
-    `SELECT run_id AS runId, session_id AS sessionId, status,
-            started_at AS startedAt, finished_at AS finishedAt,
-            last_event_seq AS lastEventSeq, total_tokens AS totalTokens
+  const { rows } = await pool.query(
+    `SELECT ${RUN_COLUMNS}
      FROM agent_runs
-     WHERE session_id = ?
+     WHERE session_id = $1
        AND status IN ('pending','running','cancelling')
      ORDER BY started_at DESC
      LIMIT 1`,
     [sessionId]
   )
-  return (rows[0] as AgentRunRow | undefined) ?? null
+  return normalizeRunRow(rows[0])
 }
 
 /**
@@ -145,20 +161,20 @@ export async function getActiveRunBySession(
  * (内存态 Run 不能跨进程恢复,见关键决策与边界)
  */
 export async function markAllRunningAsFailed(pool: DbPool): Promise<number> {
-  const [res] = await pool.query<ResultSetHeader>(
+  const res = await pool.query(
     `UPDATE agent_runs
      SET status = 'failed', finished_at = CURRENT_TIMESTAMP
      WHERE status IN ('pending','running','cancelling')`
   )
-  return res.affectedRows
+  return res.rowCount ?? 0
 }
 
 // ─── archived_run_events（Task 5.4 冷库）─────────────────────────
 
 /**
  * Task 5.4 — 冷库批量写入(archiveAndCleanup 调用)
- * - INSERT IGNORE:主键冲突跳过，保证重复归档幂等
- * - 单句 multi-row INSERT:减少往返轮路
+ * - ON CONFLICT (run_id, seq) DO NOTHING:主键冲突跳过，保证重复归档幂等
+ * - 单句 multi-row INSERT:减少往返轮路;占位符按 $i 递增拼接
  */
 export async function bulkInsertArchivedEvents(
   pool: DbPool,
@@ -168,33 +184,38 @@ export async function bulkInsertArchivedEvents(
   if (events.length === 0) return
   const values: unknown[] = []
   const placeholders: string[] = []
+  let i = 1
   for (const e of events) {
-    placeholders.push('(?, ?, ?)')
+    placeholders.push(`($${i}, $${i + 1}, $${i + 2})`)
     values.push(runId, e.seq, JSON.stringify(e.eventJson))
+    i += 3
   }
   await pool.query(
-    `INSERT IGNORE INTO archived_run_events (run_id, seq, event_json) VALUES ${placeholders.join(',')}`,
+    `INSERT INTO archived_run_events (run_id, seq, event_json)
+     VALUES ${placeholders.join(',')}
+     ON CONFLICT (run_id, seq) DO NOTHING`,
     values
   )
 }
 
 /**
  * Task 5.4 — 续订冷库查询(Redis Stream 已过期后走此路)
+ * event_json 是 JSONB，pg 已自动解析为 JS 对象，直接透传
  */
 export async function queryArchivedEventsAfter(
   pool: DbPool,
   runId: string,
   afterSeq: number
 ): Promise<AgentRunEventRow[]> {
-  const [rows] = await pool.query<RowDataPacket[]>(
-    `SELECT seq, event_json AS eventJson, created_at AS createdAt
+  const { rows } = await pool.query(
+    `SELECT seq, event_json AS "eventJson", created_at AS "createdAt"
      FROM archived_run_events
-     WHERE run_id = ? AND seq > ?
+     WHERE run_id = $1 AND seq > $2
      ORDER BY seq ASC`,
     [runId, afterSeq]
   )
   return rows.map((r) => ({
-    seq: r.seq as number,
+    seq: Number(r.seq),
     eventJson: r.eventJson as unknown,
     createdAt: r.createdAt as Date
   }))
@@ -210,7 +231,7 @@ export async function updateRunLastEventSeq(
   seq: number
 ): Promise<void> {
   await pool.query(
-    'UPDATE agent_runs SET last_event_seq = GREATEST(last_event_seq, ?) WHERE run_id = ?',
+    'UPDATE agent_runs SET last_event_seq = GREATEST(last_event_seq, $1) WHERE run_id = $2',
     [seq, runId]
   )
 }

@@ -2,14 +2,77 @@ import { useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useChatStore } from '../store/chatStore'
 import * as api from '../api'
-import type { AgUiEvent, InterruptInfo, InterruptQuestion, ToolCallInfo } from '../types'
+import type { AgUiEvent, InterruptInfo } from '../types'
+import { consumeAgUiStream, type AgUiStreamPlugin } from './agUiProtocol'
 
 /**
- * 公共事件循环:被 handleSend / handleOptionClick / startResume 复用。
+ * 实时 store 同步插件：把协议归约状态实时投射到 chatStore。
+ * 这是「仅在对话流实时进行时才需要的行为」——批量归约(reduceAgUiEvents)不装载它。
  *
  * hasPreAssistantStub:调用方是否已经 push 了 placeholder assistant 占位
  *   - true: handleSend/Option 路径
- *   - false: 续订路径(第一个 TEXT 来时 lazy 加)
+ *   - false: 续订路径(第一个内容事件来时 lazy 加)
+ */
+function createStoreSyncPlugin(hasPreAssistantStub: boolean): AgUiStreamPlugin {
+  const store = useChatStore.getState
+  const set = useChatStore.setState
+  let stubAdded = hasPreAssistantStub
+  let lastRunId: string | undefined
+  let lastPending: InterruptInfo | null = null
+
+  const ensureStub = () => {
+    if (!stubAdded) {
+      store().appendMessage({ role: 'assistant', content: '', toolCalls: [] })
+      stubAdded = true
+    }
+  }
+
+  // 会引起「最后一条 assistant 消息」内容/工具/中断变化的事件（需刷新渲染）
+  const CONTENT_EVENTS = new Set([
+    'TEXT_MESSAGE_CONTENT',
+    'THINKING_CONTENT',
+    'TOOL_CALL_START',
+    'TOOL_CALL_END',
+    'RUN_ERROR',
+    'ASK_USER',
+    'RUN_FINISHED',
+  ])
+
+  return {
+    onEvent(event, state) {
+      // RUN_STARTED：仅记录 runId（供「停止」/续订用），不触发占位
+      if (state.runId && state.runId !== lastRunId) {
+        lastRunId = state.runId
+        set({ currentRunId: state.runId })
+      }
+      // 中断状态抬到全局 store
+      if (state.pendingInterrupt && state.pendingInterrupt !== lastPending) {
+        lastPending = state.pendingInterrupt
+        set({ pendingInterrupt: state.pendingInterrupt })
+      }
+      // 内容类事件：懒加占位 + 全量投射归约状态到最后一条 assistant 消息
+      if (CONTENT_EVENTS.has(event.type)) {
+        ensureStub()
+        store().updateLastAssistant({
+          content: state.content,
+          thinking: state.thinking || undefined,
+          toolCalls: state.toolCalls.length > 0 ? [...state.toolCalls] : undefined,
+          interrupt: state.interrupt,
+        })
+      }
+    },
+    onError(error) {
+      // 客户端 abort 属正常收尾，不写错误 UI
+      if (error.name === 'AbortError') return
+      ensureStub()
+      store().updateLastAssistant({ content: `[请求失败] ${error.message}` })
+    },
+  }
+}
+
+/**
+ * 公共事件循环:被 handleSend / handleOptionClick / startResume 复用。
+ * 归约逻辑复用 agUiProtocol 注册表，实时副作用由 createStoreSyncPlugin 插件承担。
  */
 async function consumeStream(
   stream: AsyncGenerator<AgUiEvent>,
@@ -19,155 +82,11 @@ async function consumeStream(
 ) {
   const store = useChatStore.getState
   const set = useChatStore.setState
-
-  let assistantContent = ''
-  let assistantThinking = ''
-  const toolCalls: ToolCallInfo[] = []
-  let assistantStubAdded = hasPreAssistantStub
-
-  const ensureAssistantStub = () => {
-    if (!assistantStubAdded) {
-      store().appendMessage({ role: 'assistant', content: '', toolCalls: [] })
-      assistantStubAdded = true
-    }
-  }
-
-  const updateLast = () => {
-    store().updateLastAssistant({
-      content: assistantContent,
-      thinking: assistantThinking || undefined,
-      toolCalls: [...toolCalls],
-    })
-  }
-
   try {
-    for await (const event of stream) {
-      switch (event.type) {
-        case 'RUN_STARTED': {
-          set({ currentRunId: event.runId as string })
-          break
-        }
-        case 'TEXT_MESSAGE_CONTENT': {
-          ensureAssistantStub()
-          assistantContent += event.delta as string
-          updateLast()
-          break
-        }
-        case 'THINKING_CONTENT': {
-          ensureAssistantStub()
-          assistantThinking += event.delta as string
-          updateLast()
-          break
-        }
-        case 'TOOL_CALL_START': {
-          ensureAssistantStub()
-          toolCalls.push({ name: event.toolCallName as string, status: 'running' })
-          updateLast()
-          break
-        }
-        case 'TOOL_CALL_END': {
-          const running = toolCalls.find((t) => t.status === 'running')
-          if (running) running.status = 'done'
-          updateLast()
-          break
-        }
-        case 'RUN_FINISHED': {
-          // RUN_FINISHED 生命周期信号：若已有 ASK_USER 事件处理了中断渲染，此处不再重复设置。
-          // 向下兼容：若后端未发 ASK_USER 而仅在 outcome 里带了 interrupt，仍然处理。
-          const outcome = event.outcome as
-            | {
-              type: string
-              interrupts?: Array<{
-                id: string
-                message?: string
-                reason: string
-                metadata?: { options?: string[] }
-              }>
-            }
-            | undefined
-          if (outcome?.type === 'interrupt' && outcome.interrupts?.length) {
-            // 只有在前面没有 ASK_USER 事件时才走此分支（兼容旧协议）
-            const currentPending = store().pendingInterrupt
-            if (!currentPending) {
-              const questions: InterruptQuestion[] = outcome.interrupts.map((it) => ({
-                id: it.id,
-                message: it.message ?? '',
-                reason: it.reason,
-                options: it.metadata?.options,
-              }))
-              const interrupt: InterruptInfo = { questions }
-              set({ pendingInterrupt: interrupt })
-              ensureAssistantStub()
-              const displayMsg = questions[0]?.message ?? ''
-              store().setMessages((prev) => {
-                const next = [...prev]
-                const last = next[next.length - 1]!
-                next[next.length - 1] = {
-                  role: last.role,
-                  content: displayMsg,
-                  toolCalls: last.toolCalls,
-                  interrupt,
-                }
-                return next
-              })
-            }
-          }
-          break
-        }
-        case 'RUN_ERROR': {
-          ensureAssistantStub()
-          assistantContent += `\n[错误] ${event.message}`
-          updateLast()
-          break
-        }
-        case 'ASK_USER': {
-          // ASK_USER 独立一等事件：直接携带问题数据，前端据此渲染中断卡片
-          const rawQuestions = event.questions as Array<{
-            id: string
-            message: string
-            reason: string
-            options?: string[]
-          }>
-          if (rawQuestions?.length) {
-            const questions: InterruptQuestion[] = rawQuestions.map((q) => ({
-              id: q.id,
-              message: q.message,
-              reason: q.reason,
-              options: q.options,
-            }))
-            const interrupt: InterruptInfo = { questions }
-            set({ pendingInterrupt: interrupt })
-            ensureAssistantStub()
-            const displayMsg = questions[0]?.message ?? ''
-            store().setMessages((prev) => {
-              const next = [...prev]
-              const last = next[next.length - 1]!
-              next[next.length - 1] = {
-                role: last.role,
-                content: displayMsg,
-                toolCalls: last.toolCalls,
-                interrupt,
-              }
-              return next
-            })
-          }
-          break
-        }
-      }
-    }
+    await consumeAgUiStream(stream, [createStoreSyncPlugin(hasPreAssistantStub)])
     onFinished?.()
-  } catch (e) {
-    if ((e as Error).name !== 'AbortError') {
-      ensureAssistantStub()
-      store().setMessages((prev) => {
-        const next = [...prev]
-        next[next.length - 1] = {
-          role: 'assistant',
-          content: `[请求失败] ${(e as Error).message}`,
-        }
-        return next
-      })
-    }
+  } catch {
+    // 错误 UI 已由插件 onError 处理；abort 静默收尾
   } finally {
     const current = store()
     if (current.streamCtrl === ctl) {

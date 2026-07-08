@@ -1,17 +1,16 @@
 /**
- * AG-UI 事件流归约纯函数
+ * AG-UI 事件流批量归约（会话恢复路径）
  *
- * 将原始 AG-UI 事件数组批量归约为 ChatMsg 状态。
- * 与 consumeStream 中的增量逻辑保持语义一致，但无副作用、无 store 依赖。
+ * 薄封装 agUiProtocol 的注册表核心：把原始 AG-UI 事件数组归约为 ChatMsg 状态。
+ * 与实时流 consumeStream 共用同一份 handler 表，二者语义严格一致、无副作用、无 store 依赖。
  *
- * 用途：
- * - 会话恢复路径：switchSession 拿到 lastRunEvents 后批量归约
- * - 未来可作为 consumeStream 内部逻辑的 source of truth
+ * 用途：会话恢复路径（Sidebar switchSession 拿到 lastRunEvents 后批量归约）
  *
  * 规划：AG-UI 协议统一解析架构原则
  */
 
-import type { AgUiEvent, ChatMsg, InterruptInfo, InterruptQuestion, ToolCallInfo } from '../types'
+import type { AgUiEvent, ChatMsg, InterruptInfo } from '../types'
+import { applyAgUiEvent, createReduceState, toChatMsg } from './agUiProtocol'
 
 export type ReduceResult = {
     /** 归约后的 assistant 消息（含 thinking/interrupt/toolCalls） */
@@ -25,94 +24,7 @@ export type ReduceResult = {
  * 事件顺序与 SSE 流一致：THINKING → TEXT → TOOL_CALL → ASK_USER → RUN_FINISHED
  */
 export function reduceAgUiEvents(events: AgUiEvent[]): ReduceResult {
-    let content = ''
-    let thinking = ''
-    const toolCalls: ToolCallInfo[] = []
-    let interrupt: InterruptInfo | undefined
-    let pendingInterrupt: InterruptInfo | null = null
-
-    for (const event of events) {
-        switch (event.type) {
-            case 'TEXT_MESSAGE_CONTENT': {
-                content += event.delta as string
-                break
-            }
-            case 'THINKING_CONTENT': {
-                thinking += event.delta as string
-                break
-            }
-            case 'TOOL_CALL_START': {
-                toolCalls.push({ name: event.toolCallName as string, status: 'running' })
-                break
-            }
-            case 'TOOL_CALL_END': {
-                const running = toolCalls.find((t) => t.status === 'running')
-                if (running) running.status = 'done'
-                break
-            }
-            case 'ASK_USER': {
-                const rawQuestions = event.questions as Array<{
-                    id: string
-                    message: string
-                    reason: string
-                    options?: string[]
-                }>
-                if (rawQuestions?.length) {
-                    const questions: InterruptQuestion[] = rawQuestions.map((q) => ({
-                        id: q.id,
-                        message: q.message,
-                        reason: q.reason,
-                        options: q.options,
-                    }))
-                    interrupt = { questions }
-                    pendingInterrupt = { questions }
-                    // ASK_USER 时用问题文本作为显示内容
-                    content = questions[0]?.message ?? ''
-                }
-                break
-            }
-            case 'RUN_FINISHED': {
-                // 兼容回退：若无 ASK_USER 事件但 outcome 里有 interrupt
-                if (!interrupt) {
-                    const outcome = event.outcome as
-                        | {
-                            type: string
-                            interrupts?: Array<{
-                                id: string
-                                message?: string
-                                reason: string
-                                metadata?: { options?: string[] }
-                            }>
-                        }
-                        | undefined
-                    if (outcome?.type === 'interrupt' && outcome.interrupts?.length) {
-                        const questions: InterruptQuestion[] = outcome.interrupts.map((it) => ({
-                            id: it.id,
-                            message: it.message ?? '',
-                            reason: it.reason,
-                            options: it.metadata?.options,
-                        }))
-                        interrupt = { questions }
-                        pendingInterrupt = { questions }
-                        content = questions[0]?.message ?? ''
-                    }
-                }
-                break
-            }
-            case 'RUN_ERROR': {
-                content += `\n[错误] ${event.message}`
-                break
-            }
-        }
-    }
-
-    const message: ChatMsg = {
-        role: 'assistant',
-        content,
-        thinking: thinking || undefined,
-        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-        interrupt,
-    }
-
-    return { message, pendingInterrupt }
+    const state = createReduceState()
+    for (const event of events) applyAgUiEvent(state, event)
+    return { message: toChatMsg(state), pendingInterrupt: state.pendingInterrupt }
 }

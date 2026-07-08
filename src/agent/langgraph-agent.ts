@@ -16,10 +16,12 @@
 
 import { randomUUID } from 'node:crypto'
 import { createAgent } from 'langchain'
-import { MemorySaver, Command } from '@langchain/langgraph'
+import { Command } from '@langchain/langgraph'
+import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres'
 import { ChatOpenAI } from '@langchain/openai'
 import type { StructuredToolInterface } from '@langchain/core/tools'
 import type { AppConfig } from '../config.js'
+import type { DbPool } from '../db/pool.js'
 import type { AgUiEvent, Source } from './ag-ui.js'
 import {
   createRunStarted,
@@ -40,9 +42,21 @@ export type StreamContext = {
   sourceMap: Map<string, Source>
 }
 
-// Task 4.5:MemorySaver 作为当前 Checkpointer（进程内）
-// 升级路径:替换为 PostgresSaver / SqliteSaver 即可获得跨重启持久化
-const checkpointer = new MemorySaver()
+// Task 4.5 + PostgreSQL 迁移:PostgresSaver 作为 Checkpointer，复用业务 pg.Pool
+// 相比 MemorySaver（进程内存，重启即丢），PostgresSaver 把 checkpoint 持久化到
+// PostgreSQL，进程重启 / 重新部署后 interrupt 状态仍可通过 Command(resume) 恢复。
+let checkpointer: PostgresSaver | undefined
+
+/**
+ * 启动时初始化 Checkpointer（index.ts main() 在 listen 前调用一次）
+ * - 复用业务 DbPool，checkpoint 表与业务表同库
+ * - setup() 首次运行自动建 checkpoints / checkpoint_writes / checkpoint_blobs 表
+ */
+export async function initCheckpointer(pool: DbPool): Promise<void> {
+  const saver = new PostgresSaver(pool)
+  await saver.setup()
+  checkpointer = saver
+}
 
 /**
  * Task 5.1:加 timeout + maxRetries,底层透传给 OpenAI SDK client。

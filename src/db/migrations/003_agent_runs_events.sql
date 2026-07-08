@@ -16,34 +16,37 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     --   pending   → 创建但 LangGraph 尚未真正开跑(短暂中间态)
     --   running   → 在跑
     --   completed → LangGraph 正常 finish
-    --   interrupted → 命中 [ASK_USER] 反问
+    --   interrupted → 命中 ask_user 反问(原生 interrupt)
     --   cancelling → 收到 cancel 请求,正在停
     --   cancelled  → 已停
     --   failed    → 异常 / 进程重启清理
-    status ENUM(
-        'pending',
-        'running',
-        'completed',
-        'interrupted',
-        'cancelling',
-        'cancelled',
-        'failed'
-    ) NOT NULL DEFAULT 'pending',
-    started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    finished_at TIMESTAMP NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (
+        status IN (
+            'pending',
+            'running',
+            'completed',
+            'interrupted',
+            'cancelling',
+            'cancelled',
+            'failed'
+        )
+    ),
+    started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    finished_at TIMESTAMPTZ NULL,
     -- 最大 seq,供 /runs/active 给前端续订时知道从哪续
-    last_event_seq INT UNSIGNED NOT NULL DEFAULT 0,
-    total_tokens INT UNSIGNED NOT NULL DEFAULT 0,
-    CONSTRAINT fk_agent_runs_session FOREIGN KEY (session_id) REFERENCES chat_sessions (id) ON DELETE CASCADE,
-    -- /runs/active 高频查"该 session 最近未完成 Run"
-    KEY idx_agent_runs_session_status_started (
-        session_id,
-        status,
-        started_at
-    )
-) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+    last_event_seq INT NOT NULL DEFAULT 0,
+    total_tokens INT NOT NULL DEFAULT 0,
+    CONSTRAINT fk_agent_runs_session FOREIGN KEY (session_id) REFERENCES chat_sessions (id) ON DELETE CASCADE
+);
+
+-- /runs/active 高频查"该 session 最近未完成 Run"
+CREATE INDEX IF NOT EXISTS idx_agent_runs_session_status_started ON agent_runs (
+    session_id,
+    status,
+    started_at
+);
 
 -- chat_sessions 加 status 字段(简化 'running'|'end',供 GET /messages 快查前端用)
 -- 注:跟 agent_runs.status 不同步是 OK 的,前者是"该 session 是否有活跃 Run"的快照
 ALTER TABLE chat_sessions
-ADD COLUMN status ENUM('running', 'end') NOT NULL DEFAULT 'end' AFTER total_tokens;
+ADD COLUMN IF NOT EXISTS status VARCHAR(10) NOT NULL DEFAULT 'end' CHECK (status IN ('running', 'end'));

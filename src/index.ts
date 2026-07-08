@@ -24,6 +24,7 @@ import { getPrompt } from './agent/prompts/index.js'
 import { type ChatMessage } from './agent/llm.js'
 import { detectInjection, wrapUntrusted, detectSystemLeak } from './agent/sanitize.js'
 import { RunManager } from './agent/runManager.js'
+import { initCheckpointer } from './agent/langgraph-agent.js'
 import { McpManager } from './mcp/client.js'
 import { getSessionSummary } from './db/chatRepo.js'
 import { getRunById, getLastRunBySession, queryArchivedEventsAfter } from './db/runRepo.js'
@@ -50,6 +51,9 @@ function createLogger() {
 async function main() {
   const config = loadConfig()
   const pool = createPool(config)
+  // PostgreSQL 迁移:初始化 LangGraph Checkpointer(PostgresSaver 复用同一 pg.Pool)
+  // setup() 首次运行自动建 checkpoint 相关表
+  await initCheckpointer(pool)
   // Task 5.4(Redis 热层改造):启动 Redis 单例,作为事件流热层与 Pub/Sub 广播预留
   const redis = createRedis(config.REDIS_URL)
   const app = Fastify({ loggerInstance: createLogger() })

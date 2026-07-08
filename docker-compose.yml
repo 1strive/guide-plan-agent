@@ -1,16 +1,16 @@
 services:
-  mysql:
-    image: mysql:8
+  postgres:
+    image: postgres:16-alpine
     environment:
-      MYSQL_ROOT_PASSWORD: test
-      MYSQL_DATABASE: guide_plan
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: guide_plan
     ports:
-      - '3307:3306'
+      - '5433:5432'
     volumes:
-      - guide_data:/var/lib/mysql
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+      - guide_pg:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1', '-ptest']
+      test: ['CMD-SHELL', 'pg_isready -U root -d guide_plan']
       interval: 5s
       timeout: 5s
       retries: 30
@@ -34,5 +34,5 @@ services:
       start_period: 5s
 
 volumes:
-  guide_data:
+  guide_pg:
   guide_redis:

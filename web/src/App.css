@@ -33,17 +33,7 @@ body {
 }
 
 button {
-  font: inherit;
   cursor: pointer;
-  border: none;
-  background: none;
-  color: inherit;
-}
-
-input,
-textarea {
-  font: inherit;
-  color: inherit;
 }
 
 /* 自定义滚动条 — Sidebar */

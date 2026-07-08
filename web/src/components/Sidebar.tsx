@@ -291,8 +291,7 @@ export function Sidebar() {
                   key={s.id}
                   className={
                     "group flex items-start gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer transition-colors relative " +
-                    (active ? "bg-sidebar-active" : "hover:bg-sidebar-hover") +
-                    (isSelected && batchMode ? " ring-1 ring-red-400/60" : "")
+                    (active ? "bg-sidebar-active" : "hover:bg-sidebar-hover")
                   }
                   onClick={() =>
                     batchMode ? toggleSelect(s.id) : switchSession(s.id)
