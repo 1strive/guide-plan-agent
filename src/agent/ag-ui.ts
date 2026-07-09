@@ -25,6 +25,9 @@ export enum EventType {
     THINKING_END = 'THINKING_END',
     // ASK_USER：Agent 主动向用户提问（独立一等事件，替代 RUN_FINISHED.outcome.interrupt 携带问题数据）
     ASK_USER = 'ASK_USER',
+    // MAP_ROUTE：路线规划结果（后端识别高德 MCP 路径规划工具的输出，解析出折线/起终点/距离耗时）
+    // 前端据此用 AMap JS API 渲染可交互导航地图（详见 web/src/Conversation/RouteMapView.tsx）
+    MAP_ROUTE = 'MAP_ROUTE',
 }
 
 // ─── Base Event ───
@@ -164,6 +167,32 @@ export type AskUserEvent = BaseEvent & {
     }>
 }
 
+// ─── MAP_ROUTE Event ───
+// 后端识别高德 MCP 路径规划工具（maps_direction_*、maps_bicycling）的结果后，
+// 解析出路线折线、起终点、距离耗时下发前端；前端用 AMap JS API 渲染交互地图。
+// 八股 04 §6 MCP 协议：MCP 返回结构不可控，故后端采用防御性解析（见 amapRoute.ts）
+export type MapRouteEvent = BaseEvent & {
+    type: EventType.MAP_ROUTE
+    messageId: string
+    /** 出行方式：driving=驾车 walking=步行 transit=公交 bicycling=骑行 */
+    mode: 'driving' | 'walking' | 'transit' | 'bicycling'
+    /** 起点坐标 [lng, lat] */
+    origin?: [number, number]
+    /** 终点坐标 [lng, lat] */
+    destination?: [number, number]
+    /** 折线坐标点（由各 step polyline 拼接并相邻去重） */
+    path: Array<[number, number]>
+    /** 全程距离（米） */
+    distanceMeters?: number
+    /** 全程耗时（秒） */
+    durationSeconds?: number
+    /** 起点/终点显示名称（便于地图标注） */
+    originName?: string
+    destinationName?: string
+    /** 公交换乘城市（AMap.Transfer 构造必填），从工具入参解析下发 */
+    city?: string
+}
+
 // ─── Event Union ───
 export type AgUiEvent =
     | RunStartedEvent
@@ -182,6 +211,7 @@ export type AgUiEvent =
     | ThinkingContentEvent
     | ThinkingEndEvent
     | AskUserEvent
+    | MapRouteEvent
 
 // ─── 事件构造辅助函数 ───
 const ts = () => Date.now()
@@ -284,5 +314,36 @@ export function createAskUser(
     questions: AskUserEvent['questions']
 ): AskUserEvent {
     return { type: EventType.ASK_USER, messageId, questions, timestamp: ts() }
+}
+
+// ─── MAP_ROUTE 构造器 ───
+export function createMapRoute(
+    messageId: string,
+    mode: MapRouteEvent['mode'],
+    path: MapRouteEvent['path'],
+    opts?: {
+        origin?: [number, number]
+        destination?: [number, number]
+        originName?: string
+        destinationName?: string
+        distanceMeters?: number
+        durationSeconds?: number
+        city?: string
+    }
+): MapRouteEvent {
+    return {
+        type: EventType.MAP_ROUTE,
+        messageId,
+        mode,
+        path,
+        origin: opts?.origin,
+        destination: opts?.destination,
+        originName: opts?.originName,
+        destinationName: opts?.destinationName,
+        distanceMeters: opts?.distanceMeters,
+        durationSeconds: opts?.durationSeconds,
+        city: opts?.city,
+        timestamp: ts()
+    }
 }
 

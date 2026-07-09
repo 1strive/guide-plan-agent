@@ -71,4 +71,20 @@ export type ChatMsg = {
   toolCalls?: ToolCallInfo[]
   interrupt?: InterruptInfo
   quickReplies?: string[]
+  /** 高德 MCP 路径规划结果（后端解析后下发，前端据此渲染导航地图） */
+  mapRoutes?: MapRouteData[]
+}
+
+/** 高德 MCP 路径规划工具返回的结构化数据（用于地图渲染） */
+export type MapRouteData = {
+  mode: 'driving' | 'walking' | 'transit' | 'bicycling'
+  origin?: [number, number]
+  destination?: [number, number]
+  path: Array<[number, number]>
+  distanceMeters?: number
+  durationSeconds?: number
+  originName?: string
+  destinationName?: string
+  /** 公交换乘所需城市（AMap.Transfer 构造必填），后端从工具入参解析下发 */
+  city?: string
 }

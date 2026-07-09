@@ -27,7 +27,7 @@ function createStoreSyncPlugin(hasPreAssistantStub: boolean): AgUiStreamPlugin {
     }
   }
 
-  // 会引起「最后一条 assistant 消息」内容/工具/中断变化的事件（需刷新渲染）
+  // 会引起「最后一条 assistant 消息」内容/工具/中断/地图变化的事件（需刷新渲染）
   const CONTENT_EVENTS = new Set([
     'TEXT_MESSAGE_CONTENT',
     'THINKING_CONTENT',
@@ -36,6 +36,7 @@ function createStoreSyncPlugin(hasPreAssistantStub: boolean): AgUiStreamPlugin {
     'RUN_ERROR',
     'ASK_USER',
     'RUN_FINISHED',
+    'MAP_ROUTE',
   ])
 
   return {
@@ -58,6 +59,7 @@ function createStoreSyncPlugin(hasPreAssistantStub: boolean): AgUiStreamPlugin {
           thinking: state.thinking || undefined,
           toolCalls: state.toolCalls.length > 0 ? [...state.toolCalls] : undefined,
           interrupt: state.interrupt,
+          mapRoutes: state.mapRoutes.length > 0 ? [...state.mapRoutes] : undefined,
         })
       }
     },

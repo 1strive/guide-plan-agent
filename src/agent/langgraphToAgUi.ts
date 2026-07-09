@@ -36,8 +36,10 @@ import {
   createToolCallResult,
   createThinkingStart,
   createThinkingContent,
-  createThinkingEnd
+  createThinkingEnd,
+  createMapRoute
 } from './ag-ui.js'
+import { isAmapRouteTool, parseAmapRoute, AMAP_ROUTE_TOOL_MODE } from './amapRoute.js'
 import type { TokenUsage } from './token-usage.js'
 import type { StreamContext } from './langgraph-agent.js'
 import {
@@ -273,6 +275,7 @@ export async function* translateLangGraphStream(
         case 'on_tool_end': {
           // Task 4.5：过滤 ask_user 工具的 end 事件
           if (event.name === ASK_USER_TOOL_NAME) break
+          const toolName = event.name ?? 'unknown_tool'
           const toolCallId = event.run_id ?? randomUUID()
           const output = data.output
           const text =
@@ -303,6 +306,42 @@ export async function* translateLangGraphStream(
           yield createStepStarted('tool_execution')
           yield createToolCallResult(toolCallId, String(text))
           yield createStepFinished('tool_execution')
+
+          // 高德 MCP 路径规划工具：额外解析路线数据 → MAP_ROUTE 事件（前端渲染导航地图）
+          // 八股 04 §6 MCP 协议：解析失败不发事件，不阻断主流程，只走普通工具 chip 通道
+          if (isAmapRouteTool(toolName)) {
+            const mode = AMAP_ROUTE_TOOL_MODE[toolName]!
+            const parsed = parseAmapRoute(mode, output)
+            if (parsed) {
+              // 公交换乘需 city（AMap.Transfer 前端构造必填），从工具入参 argsPreview 解析
+              const city = parseCityFromArgs(started?.argsPreview)
+              yield createMapRoute(randomUUID(), parsed.mode, parsed.path, {
+                origin: parsed.origin,
+                destination: parsed.destination,
+                originName: parsed.originName,
+                destinationName: parsed.destinationName,
+                distanceMeters: parsed.distanceMeters,
+                durationSeconds: parsed.durationSeconds,
+                city
+              })
+              ctx.log?.info(
+                { tool: toolName, toolCallId, points: parsed.path.length },
+                'map route parsed'
+              )
+            } else {
+              // 调试日志：打印 output 实际类型与前 500 字符，定位解析失败原因
+              const outType = output === null ? 'null' : Array.isArray(output) ? 'array' : typeof output
+              const outShape = (() => {
+                if (output === null || output === undefined) return String(output)
+                const s = typeof output === 'string' ? output : JSON.stringify(output)
+                return s.length > 500 ? s.slice(0, 500) + '…' : s
+              })()
+              ctx.log?.info(
+                { tool: toolName, toolCallId, outputType: outType, outputShape: outShape },
+                'map route parse skipped or failed'
+              )
+            }
+          }
           break
         }
 

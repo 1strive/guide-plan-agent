@@ -27,7 +27,7 @@
 
 ---
 
-## 2. 事件类型完整列表(15 种)
+## 2. 事件类型完整列表(16 种)
 
 ### 2.1 生命周期事件
 
@@ -325,6 +325,45 @@ Run 执行出错(LLM 超时 / 工具失败 / 内部异常)。通常紧跟 RUN_FI
 
 ---
 
+#### MAP_ROUTE
+
+后端识别高德 MCP 路径规划工具（`maps_direction_*`、`maps_bicycling`）的输出后，解析出路线坐标下发前端渲染导航地图。
+紧跟在对应 `TOOL_CALL_RESULT` 之后发射，解析失败时不发此事件。
+
+```json
+{
+  "type": "MAP_ROUTE",
+  "messageId": "route-msg-uuid",
+  "mode": "driving",
+  "origin": [116.397428, 39.90923],
+  "destination": [116.407526, 39.904030],
+  "originName": "北京西站",
+  "destinationName": "故宫",
+  "path": [[116.3974,39.9092],[116.3980,39.9085], ...],
+  "distanceMeters": 1234,
+  "durationSeconds": 420,
+  "timestamp": ...
+}
+```
+
+| 字段            | 说明                                                           |
+| --------------- | -------------------------------------------------------------- |
+| mode            | 出行方式：`driving` / `walking` / `transit` / `bicycling`      |
+| origin          | 起点坐标 `[lng, lat]`（可选，解析失败时后端用 path 首尾兜底）  |
+| destination     | 终点坐标 `[lng, lat]`                                          |
+| originName      | 起点名称（供 Marker 标注）                                     |
+| destinationName | 终点名称                                                       |
+| path            | 折线坐标点数组（各 step polyline 拼接、相邻去重，至少 2 个点） |
+| distanceMeters  | 全程距离（米）                                                 |
+| durationSeconds | 全程耗时（秒）                                                 |
+
+**前端动作**:在 `AssistantBubble` 内渲染 `RouteMapView`（AMap JS API），画折线 + 起终点 Marker，footer 显示出行方式/距离/耗时；未配置 `VITE_AMAP_JS_KEY` 时渲染占位提示。
+
+> 对应后端：`src/agent/amapRoute.ts`(解析) + `src/agent/langgraphToAgUi.ts`(识别路径工具并发事件)。
+> 前端：`web/src/Conversation/RouteMapView.tsx`。
+
+---
+
 ## 3. 事件时序图
 
 ### 正常对话(带工具调用)
@@ -348,7 +387,8 @@ RUN_STARTED
 ├── STEP_FINISHED("tool_call")
 │
 ├── STEP_STARTED("tool_execution")  ← 工具执行
-│   └── TOOL_CALL_RESULT
+│   ├── TOOL_CALL_RESULT
+│   └── MAP_ROUTE?                  ← 后端识别高德路径规划工具后额外下发(供地图渲染)
 ├── STEP_FINISHED("tool_execution")
 │
 ├── (重复 generating → tool_call → tool_execution ...)
@@ -445,20 +485,21 @@ RUN_STARTED
 
 ## 5. 前端渲染优先级建议
 
-| 事件                    |   优先级    | 建议 UI                            |
-| ----------------------- | :---------: | ---------------------------------- |
-| TEXT_MESSAGE_CONTENT    | **P0 必须** | 主回答区,流式追加文本              |
-| RUN_FINISHED(interrupt) | **P0 必须** | 反问文本 + 选项按钮                |
-| RUN_ERROR               | **P0 必须** | 错误提示(红色/警告样式)            |
-| TOOL_CALL_START         | **P1 推荐** | 工具调用 chip(工具名 + ⏳ loading) |
-| TOOL_CALL_END           | **P1 推荐** | chip 状态 ⏳ → ✅                  |
-| THINKING_CONTENT        | **P1 推荐** | 折叠区"思考过程",灰色小字,默认收起 |
-| TOOL_CALL_RESULT        |   P2 可选   | 展开查看工具返回结果(JSON 格式化)  |
-| TOOL_CALL_ARGS          |   P2 可选   | 展开查看工具入参                   |
-| STEP_STARTED/FINISHED   |   P2 可选   | 顶部进度条 / 阶段标签              |
-| RUN_STARTED             |   P3 内部   | 存 runId,不渲染                    |
-| TEXT_MESSAGE_START/END  |   P3 内部   | 控制流边界,不直接渲染              |
-| THINKING_START/END      |   P3 内部   | 控制 thinking 折叠区显隐           |
+| 事件                    |   优先级    | 建议 UI                                        |
+| ----------------------- | :---------: | ---------------------------------------------- |
+| TEXT_MESSAGE_CONTENT    | **P0 必须** | 主回答区,流式追加文本                          |
+| RUN_FINISHED(interrupt) | **P0 必须** | 反问文本 + 选项按钮                            |
+| RUN_ERROR               | **P0 必须** | 错误提示(红色/警告样式)                        |
+| MAP_ROUTE               | **P1 推荐** | 在气泡内渲染高德交互地图(折线/起终点/距离耗时) |
+| TOOL_CALL_START         | **P1 推荐** | 工具调用 chip(工具名 + ⏳ loading)             |
+| TOOL_CALL_END           | **P1 推荐** | chip 状态 ⏳ → ✅                              |
+| THINKING_CONTENT        | **P1 推荐** | 折叠区"思考过程",灰色小字,默认收起             |
+| TOOL_CALL_RESULT        |   P2 可选   | 展开查看工具返回结果(JSON 格式化)              |
+| TOOL_CALL_ARGS          |   P2 可选   | 展开查看工具入参                               |
+| STEP_STARTED/FINISHED   |   P2 可选   | 顶部进度条 / 阶段标签                          |
+| RUN_STARTED             |   P3 内部   | 存 runId,不渲染                                |
+| TEXT_MESSAGE_START/END  |   P3 内部   | 控制流边界,不直接渲染                          |
+| THINKING_START/END      |   P3 内部   | 控制 thinking 折叠区显隐                       |
 
 ---
 

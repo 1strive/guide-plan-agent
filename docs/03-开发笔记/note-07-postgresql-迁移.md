@@ -23,16 +23,16 @@
 
 ## 2. 总览（Task → 一句话 → 新增/改动文件）
 
-| 改动点 | 一句话 | 新增文件 | 改动文件 |
-| --- | --- | --- | --- |
-| 依赖 | `mysql2` → `pg` + `@types/pg` + `@langchain/langgraph-checkpoint-postgres` | — | `package.json` |
-| 容器 | MySQL(3307) → `postgres:16-alpine`(5433) | — | `docker-compose.yml` |
-| 配置 | `MYSQL_*` → `PG_*` | — | `.env` / `.env.example` / `src/config.ts` |
-| 连接池 | `mysql2` Pool → `pg.Pool`，`query` 返回 `{rows,rowCount}` | — | `src/db/pool.ts` |
-| 迁移 SQL | MySQL 语法 → PG 语法（BIGSERIAL/TEXT/JSONB/CHECK） | — | `migrations/001~006.sql` |
-| 迁移脚本 | 先连 `postgres` 库查 `pg_database` 再建库 | — | `scripts/migrate.ts` |
-| 数据访问 | `?`→`$n`、`RETURNING`、`ON CONFLICT`、`rowCount`、bigint→Number | — | `src/db/chatRepo.ts` / `src/db/runRepo.ts` |
-| Checkpoint | `MemorySaver` → `PostgresSaver` + 启动 `initCheckpointer` | — | `src/agent/langgraph-agent.ts` / `src/index.ts` |
+| 改动点     | 一句话                                                                     | 新增文件 | 改动文件                                        |
+| ---------- | -------------------------------------------------------------------------- | -------- | ----------------------------------------------- |
+| 依赖       | `mysql2` → `pg` + `@types/pg` + `@langchain/langgraph-checkpoint-postgres` | —        | `package.json`                                  |
+| 容器       | MySQL(3307) → `postgres:16-alpine`(5433)                                   | —        | `docker-compose.yml`                            |
+| 配置       | `MYSQL_*` → `PG_*`                                                         | —        | `.env` / `.env.example` / `src/config.ts`       |
+| 连接池     | `mysql2` Pool → `pg.Pool`，`query` 返回 `{rows,rowCount}`                  | —        | `src/db/pool.ts`                                |
+| 迁移 SQL   | MySQL 语法 → PG 语法（BIGSERIAL/TEXT/JSONB/CHECK）                         | —        | `migrations/001~006.sql`                        |
+| 迁移脚本   | 先连 `postgres` 库查 `pg_database` 再建库                                  | —        | `scripts/migrate.ts`                            |
+| 数据访问   | `?`→`$n`、`RETURNING`、`ON CONFLICT`、`rowCount`、bigint→Number            | —        | `src/db/chatRepo.ts` / `src/db/runRepo.ts`      |
+| Checkpoint | `MemorySaver` → `PostgresSaver` + 启动 `initCheckpointer`                  | —        | `src/agent/langgraph-agent.ts` / `src/index.ts` |
 
 ---
 
@@ -44,14 +44,18 @@
 `PostgresSaver` 能直接复用同一个 Pool。
 
 ```ts
-import pg from 'pg'
+import pg from "pg";
 export function createPool(config: AppConfig | DbConfig): pg.Pool {
   return new pg.Pool({
-    host: config.PG_HOST, port: config.PG_PORT, user: config.PG_USER,
-    password: config.PG_PASSWORD, database: config.PG_DATABASE, max: 10
-  })
+    host: config.PG_HOST,
+    port: config.PG_PORT,
+    user: config.PG_USER,
+    password: config.PG_PASSWORD,
+    database: config.PG_DATABASE,
+    max: 10,
+  });
 }
-export type DbPool = pg.Pool
+export type DbPool = pg.Pool;
 ```
 
 **边界**：`pg` 的 `query()` 返回 `{ rows, rowCount }`，不再是 mysql2 的 `[rows, fields]` 解构 —— 所有调用方随之改写（见 3.4）。
@@ -62,10 +66,14 @@ PostgreSQL 不支持 `CREATE DATABASE IF NOT EXISTS`，需先连默认 `postgres
 `pg_database`，不存在再建；随后连目标库顺序执行 SQL。
 
 ```ts
-const admin = new pg.Client({ ...conn, database: 'postgres' })
-await admin.connect()
-const exists = await admin.query('SELECT 1 FROM pg_database WHERE datname = $1', [config.PG_DATABASE])
-if (exists.rowCount === 0) await admin.query(`CREATE DATABASE "${config.PG_DATABASE}"`)
+const admin = new pg.Client({ ...conn, database: "postgres" });
+await admin.connect();
+const exists = await admin.query(
+  "SELECT 1 FROM pg_database WHERE datname = $1",
+  [config.PG_DATABASE],
+);
+if (exists.rowCount === 0)
+  await admin.query(`CREATE DATABASE "${config.PG_DATABASE}"`);
 ```
 
 **边界**：库名不能参数化，只能拼接（用双引号包裹）。迁移幂等不再依赖 MySQL 错误码 1050/1060，改由每个 SQL 文件自带 `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` 保证。
@@ -74,16 +82,16 @@ if (exists.rowCount === 0) await admin.query(`CREATE DATABASE "${config.PG_DATAB
 
 MySQL → PostgreSQL 语法差异总表（面试高频）：
 
-| MySQL | PostgreSQL |
-| --- | --- |
-| `AUTO_INCREMENT` | `BIGSERIAL` |
-| `INT UNSIGNED` | `INT` |
-| `MEDIUMTEXT` | `TEXT` |
-| `ENUM(...)` | `VARCHAR + CHECK` |
-| `JSON` | `JSONB` |
-| `TIMESTAMP` | `TIMESTAMPTZ` |
-| `KEY idx (...)` 内联索引 | `CREATE INDEX` 独立语句 |
-| `ENGINE=InnoDB` / `CHARSET` / 反引号 | 全部移除 |
+| MySQL                                | PostgreSQL              |
+| ------------------------------------ | ----------------------- |
+| `AUTO_INCREMENT`                     | `BIGSERIAL`             |
+| `INT UNSIGNED`                       | `INT`                   |
+| `MEDIUMTEXT`                         | `TEXT`                  |
+| `ENUM(...)`                          | `VARCHAR + CHECK`       |
+| `JSON`                               | `JSONB`                 |
+| `TIMESTAMP`                          | `TIMESTAMPTZ`           |
+| `KEY idx (...)` 内联索引             | `CREATE INDEX` 独立语句 |
+| `ENGINE=InnoDB` / `CHARSET` / 反引号 | 全部移除                |
 
 ### 3.4 数据访问层 `src/db/chatRepo.ts` / `src/db/runRepo.ts`
 
@@ -94,15 +102,19 @@ MySQL → PostgreSQL 语法差异总表（面试高频）：
 3. **自增主键**：mysql2 `insertId` → `RETURNING id`
    ```ts
    const { rows } = await pool.query(
-     "INSERT INTO chat_messages (session_id, role, content) VALUES ($1, 'assistant', '') RETURNING id", [sessionId])
-   return Number((rows[0] as { id: number | string }).id)
+     "INSERT INTO chat_messages (session_id, role, content) VALUES ($1, 'assistant', '') RETURNING id",
+     [sessionId],
+   );
+   return Number((rows[0] as { id: number | string }).id);
    ```
 4. **影响行数 / 幂等写 / bigint**：`affectedRows` → `rowCount ?? 0`；`INSERT IGNORE` → `ON CONFLICT (run_id, seq) DO NOTHING`；pg 把 `bigint`/`COUNT(*)` 返回为字符串，用 `Number()` 转（`runRepo.ts` 抽了 `normalizeRunRow()` 统一处理，`chatRepo.listSessions` 手动转 `totalTokens`/`messageCount`）。
    ```ts
    await pool.query(
      `INSERT INTO archived_run_events (run_id, seq, event_json)
-      VALUES ${placeholders.join(',')}
-      ON CONFLICT (run_id, seq) DO NOTHING`, values)
+      VALUES ${placeholders.join(",")}
+      ON CONFLICT (run_id, seq) DO NOTHING`,
+     values,
+   );
    ```
 
 **边界**：列别名要保留驼峰必须用双引号，如 `total_tokens AS "totalTokens"`（PG 默认把无引号标识符转小写）。
@@ -114,19 +126,19 @@ MySQL → PostgreSQL 语法差异总表（面试高频）：
 
 ```ts
 // langgraph-agent.ts
-import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres'
-let checkpointer: PostgresSaver | undefined
+import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
+let checkpointer: PostgresSaver | undefined;
 export async function initCheckpointer(pool: DbPool): Promise<void> {
-  const saver = new PostgresSaver(pool)
-  await saver.setup()          // 首次运行自动建 checkpoint 三表
-  checkpointer = saver
+  const saver = new PostgresSaver(pool);
+  await saver.setup(); // 首次运行自动建 checkpoint 三表
+  checkpointer = saver;
 }
 ```
 
 ```ts
 // index.ts main()：listen 前初始化一次
-const pool = createPool(config)
-await initCheckpointer(pool)
+const pool = createPool(config);
+await initCheckpointer(pool);
 ```
 
 **设计决策**：图状态现已持久化，但项目层「重挂 stream + subscriber」仍未自动做，

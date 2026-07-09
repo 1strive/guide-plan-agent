@@ -5,6 +5,7 @@ import { ToolCallChip } from "./ToolCallChip";
 import { InterruptCard } from "../ChatInput/InterruptCard";
 import { Toolbox } from "./Toolbox";
 import { QuickReplies } from "./QuickReplies";
+import { RouteMapView } from "./RouteMapView";
 import { IconCompass } from "../components/Icons";
 import { useChatStore } from "../store/chatStore";
 
@@ -50,6 +51,13 @@ function AssistantBubble({
           <div className="flex flex-wrap gap-2 mt-4">
             {msg.toolCalls.map((tc, j) => (
               <ToolCallChip key={j} toolCall={tc} />
+            ))}
+          </div>
+        )}
+        {msg.mapRoutes && msg.mapRoutes.length > 0 && (
+          <div className="flex flex-col gap-2 mt-2">
+            {msg.mapRoutes.map((r, j) => (
+              <RouteMapView key={j} route={r} />
             ))}
           </div>
         )}
