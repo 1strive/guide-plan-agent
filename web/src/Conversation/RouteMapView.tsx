@@ -92,7 +92,10 @@ function MapCard({ routes }: { routes: MapRouteData[] }) {
           try {
             // 公交换乘（Transfer）构造需 city 参数（官方必填），缺失时从后端下发的 route.city 取，
             // 再不行用 '全国' 兑底（部分场景 AMap 会根据坐标自适应）
-            const plannerOpts: Record<string, unknown> = { map, autoFitView: false };
+            const plannerOpts: Record<string, unknown> = {
+              map,
+              autoFitView: false,
+            };
             if (r.mode === "transit") {
               plannerOpts.city = r.city ?? "全国";
             }
@@ -320,7 +323,8 @@ function drawTransitPlan(AMap: any, map: any, data: any, isActive: boolean) {
     // 公交/地铁段：via_stops 或 path
     if (seg?.transit?.path) collectLngLat(seg.transit.path, path);
     if (Array.isArray(seg?.transit?.via_stops)) {
-      for (const stop of seg.transit.via_stops) collectLngLat(stop?.location, path);
+      for (const stop of seg.transit.via_stops)
+        collectLngLat(stop?.location, path);
     }
   }
   if (path.length >= 2) {
