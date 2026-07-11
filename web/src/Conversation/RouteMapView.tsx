@@ -29,10 +29,11 @@ const MODE_COLOR: Record<MapRouteData["mode"], string> = {
 /**
  * 路线地图组件（含交通工具切换）
  *
- * 实现思路：
- * - 高德 MCP 路径规划工具的 step.path 经常为空（MCP 不下发折线坐标）
- * - 前端用 AMap JS API 自带 Driving/Walking/Transfer/Riding 插件重新规划路径
- * - 同一消息内多种出行方式 → 单张地图 + Tab 切换
+ * 实现思路（高德官方 JS API 2.0 标准做法）：
+ * - 构造 Driving/Walking/Riding/Transfer 时传入 `map`，调用 `search()` 后
+ *   插件会「自动把规划出的曲线导航线绘制到地图上」（官方教程 §2），无需手动画折线
+ * - 注意：官方方法名是 search()，不是 plan()
+ * - 同一消息内多种出行方式 → 单张地图 + Tab 切换（切 Tab → 重建地图重新 search）
  */
 export function RouteMapView({ route }: { route: MapRouteData }) {
   const allRoutes = useAllRoutes(route);
@@ -40,6 +41,8 @@ export function RouteMapView({ route }: { route: MapRouteData }) {
 }
 
 function MapCard({ routes }: { routes: MapRouteData[] }) {
+  console.log({ routes }, "ja");
+
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<
     "loading" | "ready" | "error" | "no-key" | "no-route"
@@ -68,7 +71,17 @@ function MapCard({ routes }: { routes: MapRouteData[] }) {
     if (AMAP_SECURITY_CODE)
       w._AMapSecurityConfig = { securityJsCode: AMAP_SECURITY_CODE };
 
-    const plugins = Array.from(new Set(routes.map((r) => MODE_PLUGIN[r.mode])));
+    if (!activeRoute) {
+      setStatus("no-route");
+      return;
+    }
+
+    const plugin = MODE_PLUGIN[activeRoute.mode];
+    // 一次性加载所有出行方式的插件：AMapLoader 首次 load 后会缓存 AMap，
+    // 后续用不同 plugins 再 load 不会补加载缺失插件，导致切换 Tab 时目标插件 undefined → 退化直线
+    const plugins = Array.from(
+      new Set(routes.map((rt) => MODE_PLUGIN[rt.mode])),
+    );
 
     AMapLoader.load({ key: AMAP_KEY, version: "2.0", plugins })
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -76,101 +89,66 @@ function MapCard({ routes }: { routes: MapRouteData[] }) {
         if (destroyed || !container) return;
         map = new AMap.Map(container, { resizeEnable: true, zooms: [3, 18] });
 
-        // 只渲染当前选中的交通方式：切换 Tab 时 activeIdx 变化 → useEffect 重建地图 → 只画新路线
-        for (const r of routes) {
-          if (r !== activeRoute) continue;
-          if (!r.origin || !r.destination) continue;
-          const PluginCtor = (AMap as any)[MODE_PLUGIN[r.mode]];
-          if (!PluginCtor) {
-            console.error(
-              `[RouteMapView] plugin ${MODE_PLUGIN[r.mode]} not loaded, fallback`,
-            );
-            drawFallback(AMap, map, r, r === activeRoute);
-            continue;
-          }
-          const isActive = r === activeRoute;
-          try {
-            // 公交换乘（Transfer）构造需 city 参数（官方必填），缺失时从后端下发的 route.city 取，
-            // 再不行用 '全国' 兑底（部分场景 AMap 会根据坐标自适应）
-            const plannerOpts: Record<string, unknown> = {
-              map,
-              autoFitView: false,
+        const r = activeRoute;
+        if (!r.origin || !r.destination) {
+          setStatus("no-route");
+          return;
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        // 注意：加载插件用带前缀名 "AMap.Transfer"，但从 AMap 上取构造函数要去掉前缀 → AMap.Transfer
+        const ctorName = plugin.replace(/^AMap\./, "");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const PluginCtor = (AMap as any)[ctorName];
+        if (!PluginCtor) {
+          console.error(`[RouteMapView] plugin ${plugin} not loaded, fallback`);
+          drawFallback(AMap, map, r);
+          finishView(AMap, map, r);
+          setStatus("ready");
+          return;
+        }
+
+        // 构造：传入 map → search 完成后自动绘制曲线导航线（官方标准）
+        // 公交换乘（Transfer）额外需要 city（官方必填），缺失用后端下发的 route.city，再兜底 '全国'
+        const plannerOpts: Record<string, unknown> = { map };
+        if (r.mode === "driving") plannerOpts.policy = 0; // 0 = 速度优先
+        if (r.mode === "transit") plannerOpts.city = r.city ?? "全国";
+        const planner = new PluginCtor(plannerOpts);
+
+        // 官方方法名是 search（不是 plan）；兼容极少数只有 plan 的旧构建
+        const doSearch: (...args: unknown[]) => void =
+          typeof planner.search === "function"
+            ? planner.search.bind(planner)
+            : planner.plan.bind(planner);
+
+        doSearch(r.origin, r.destination, (s: string, data: unknown) => {
+          if (destroyed) return;
+          // ── 关键调试：打印插件返回的完整数据结构 ──
+          console.log(
+            `[RouteMapView] mode=${r.mode} status=${s} result =`,
+            data,
+          );
+          if (s === "complete") {
+            // 插件已自动把路线画到地图上，这里仅提取距离/耗时
+            const d = data as {
+              routes?: Array<{ distance?: number; time?: number }>;
+              plans?: Array<{ distance?: number; time?: number }>;
             };
-            if (r.mode === "transit") {
-              plannerOpts.city = r.city ?? "全国";
-            }
-            const planner = new PluginCtor(plannerOpts);
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            planner.plan(r.origin, r.destination, (s: string, data: any) => {
-              console.log(
-                `[RouteMapView] ${r.mode} plan status=`,
-                s,
-                "routes=",
-                data?.routes?.length ?? data?.plans?.length,
-              );
-              if (destroyed) return;
-              if (s === "complete") {
-                if (r.mode === "transit") {
-                  // 公交结果结构为 plans/segments
-                  drawTransitPlan(AMap, map, data, isActive);
-                  if (isActive) {
-                    const p0 = data?.plans?.[0] as any;
-                    setPlanInfo({
-                      distanceMeters: Number(p0?.distance) || undefined,
-                      durationSeconds: Number(p0?.time) || undefined,
-                    });
-                  }
-                } else if (data?.routes) {
-                  drawPlan(AMap, map, data.routes, r.mode, isActive);
-                  if (isActive) {
-                    const first = data.routes[0] as any;
-                    setPlanInfo({
-                      distanceMeters: Number(first?.distance) || undefined,
-                      durationSeconds:
-                        Number(first?.time ?? first?.duration) || undefined,
-                    });
-                  }
-                }
-              } else if (s === "no_data" || s === "error") {
-                console.warn(`[RouteMapView] ${r.mode} plan ${s}:`, data);
-                drawFallback(AMap, map, r, isActive);
-              }
+            const item = d.routes?.[0] ?? d.plans?.[0];
+            setPlanInfo({
+              distanceMeters: Number(item?.distance) || undefined,
+              durationSeconds: Number(item?.time) || undefined,
             });
-          } catch (e) {
-            console.error(`[RouteMapView] ${r.mode} plan threw:`, e);
-            drawFallback(AMap, map, r, isActive);
+          } else {
+            console.warn(`[RouteMapView] ${r.mode} search ${s}, use fallback`);
+            drawFallback(AMap, map, r);
           }
-        }
+          if (!destroyed) finishView(AMap, map, r);
+        });
 
-        // 兜底：若异步回调未触发，0.5s 后检查覆盖物，仍无则画 fallback（仅当前选中路线）
-        setTimeout(() => {
-          if (destroyed || !map) return;
-          const overlays = map.getAllOverlays?.() ?? [];
-          if (Array.isArray(overlays) && overlays.length === 0 && activeRoute) {
-            drawFallback(AMap, map, activeRoute, true);
-          }
-        }, 500);
-
-        if (activeRoute?.origin) {
-          map.add(
-            new AMap.Marker({
-              position: activeRoute.origin,
-              content: `<div style="background:#16a34a;color:#fff;padding:2px 8px;border-radius:999px;font-size:12px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.2)">起${activeRoute.originName ? " " + escapeHtml(activeRoute.originName) : ""}</div>`,
-              offset: new AMap.Pixel(-10, -10),
-            }),
-          );
-        }
-        if (activeRoute?.destination) {
-          map.add(
-            new AMap.Marker({
-              position: activeRoute.destination,
-              content: `<div style="background:#dc2626;color:#fff;padding:2px 8px;border-radius:999px;font-size:12px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.2)">终${activeRoute.destinationName ? " " + escapeHtml(activeRoute.destinationName) : ""}</div>`,
-              offset: new AMap.Pixel(-10, -10),
-            }),
-          );
-        }
-        map.setFitView(null, false, [40, 40, 40, 40]);
-        setStatus(routes.length > 0 ? "ready" : "no-route");
+        // 起终点标注 + 视野自适应（自动绘制线也会 fitView，这里补 marker）
+        finishView(AMap, map, r);
+        setStatus("ready");
       })
       .catch((e: unknown) => {
         setErrorMsg(`渲染地图失败：${(e as Error).message}`);
@@ -186,7 +164,7 @@ function MapCard({ routes }: { routes: MapRouteData[] }) {
       }
       map = null;
     };
-  }, [routes, activeIdx]);
+  }, [routes, activeIdx, activeRoute]);
 
   useEffect(() => setPlanInfo({}), [activeIdx]);
 
@@ -270,131 +248,45 @@ function MapCard({ routes }: { routes: MapRouteData[] }) {
   );
 }
 
+/** 起终点标注 + 视野自适应 */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function drawPlan(
-  AMap: any,
-  map: any,
-  routes: any[],
-  mode: MapRouteData["mode"],
-  isActive: boolean,
-) {
-  if (!Array.isArray(routes) || routes.length === 0) return;
-  const first = routes[0] as any;
-  const steps = first?.steps as Array<Record<string, unknown>> | undefined;
-  if (!Array.isArray(steps)) return;
-  const path: Array<[number, number]> = [];
-  for (const step of steps) {
-    // AMap JS API 2.0 的 step.path 是 Array<LngLat>（LngLat 对象，非 [lng,lat] 数组）
-    collectLngLat(step?.path, path);
-  }
-  if (path.length >= 2) {
+function finishView(AMap: any, map: any, r: MapRouteData) {
+  if (!map) return;
+  if (r.origin) {
     map.add(
-      new AMap.Polyline({
-        path,
-        strokeColor: MODE_COLOR[mode],
-        strokeWeight: 6,
-        strokeOpacity: isActive ? 0.95 : 0.5,
-        lineJoin: "round",
-        lineCap: "round",
+      new AMap.Marker({
+        position: r.origin,
+        content: `<div style="background:#16a34a;color:#fff;padding:2px 8px;border-radius:999px;font-size:12px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.2)">起${r.originName ? " " + escapeHtml(r.originName) : ""}</div>`,
+        offset: new AMap.Pixel(-10, -10),
       }),
     );
   }
-}
-
-/**
- * 公交换乘（Transfer）结果结构与驾车/步行不同：
- *   result.plans[0].segments[] → 每段含 walking.path / transit.path 等
- * 遍历所有 segment 收集 LngLat 折线。
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function drawTransitPlan(AMap: any, map: any, data: any, isActive: boolean) {
-  const plans = data?.plans as any[] | undefined;
-  if (!Array.isArray(plans) || plans.length === 0) return false;
-  const segments = plans[0]?.segments as any[] | undefined;
-  if (!Array.isArray(segments)) return false;
-
-  const path: Array<[number, number]> = [];
-  for (const seg of segments) {
-    // 步行段
-    if (seg?.walking?.path) collectLngLat(seg.walking.path, path);
-    if (Array.isArray(seg?.walking?.steps)) {
-      for (const st of seg.walking.steps) collectLngLat(st?.path, path);
-    }
-    // 公交/地铁段：via_stops 或 path
-    if (seg?.transit?.path) collectLngLat(seg.transit.path, path);
-    if (Array.isArray(seg?.transit?.via_stops)) {
-      for (const stop of seg.transit.via_stops)
-        collectLngLat(stop?.location, path);
-    }
-  }
-  if (path.length >= 2) {
+  if (r.destination) {
     map.add(
-      new AMap.Polyline({
-        path,
-        strokeColor: MODE_COLOR.transit,
-        strokeWeight: 6,
-        strokeOpacity: isActive ? 0.95 : 0.5,
-        lineJoin: "round",
-        lineCap: "round",
+      new AMap.Marker({
+        position: r.destination,
+        content: `<div style="background:#dc2626;color:#fff;padding:2px 8px;border-radius:999px;font-size:12px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.2)">终${r.destinationName ? " " + escapeHtml(r.destinationName) : ""}</div>`,
+        offset: new AMap.Pixel(-10, -10),
       }),
     );
-    return true;
   }
-  return false;
-}
-
-/**
- * 把 AMap 返回的坐标容器统一提取为 [lng,lat] 追加到 out。
- * 兼容三种形态：
- *   1. Array<LngLat>（对象含 lng/lat 或 getLng/getLat）
- *   2. Array<[lng,lat]>（数组）
- *   3. 单个 LngLat 对象
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function collectLngLat(container: any, out: Array<[number, number]>) {
-  if (!container) return;
-  if (Array.isArray(container)) {
-    for (const pt of container) {
-      const ll = toLngLatPair(pt);
-      if (ll) out.push(ll);
-    }
-  } else {
-    const ll = toLngLatPair(container);
-    if (ll) out.push(ll);
+  try {
+    map.setFitView(null, false, [40, 40, 40, 40]);
+  } catch {
+    /* ignore */
   }
 }
 
+/** 兜底：插件规划失败时，用后端下发的起终点画一条直线（虚线，提示非真实路径） */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function toLngLatPair(pt: any): [number, number] | null {
-  if (!pt) return null;
-  // LngLat 对象：优先 getLng/getLat 方法
-  if (typeof pt.getLng === "function" && typeof pt.getLat === "function") {
-    const lng = pt.getLng();
-    const lat = pt.getLat();
-    if (Number.isFinite(lng) && Number.isFinite(lat)) return [lng, lat];
-  }
-  // 属性 lng/lat（或 R/Q/大小写变体由 SDK 决定，这里取标准 lng/lat）
-  if (typeof pt.lng === "number" && typeof pt.lat === "number") {
-    return [pt.lng, pt.lat];
-  }
-  // [lng, lat] 数组
-  if (Array.isArray(pt) && pt.length === 2) {
-    const lng = Number(pt[0]);
-    const lat = Number(pt[1]);
-    if (Number.isFinite(lng) && Number.isFinite(lat)) return [lng, lat];
-  }
-  return null;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function drawFallback(AMap: any, map: any, r: MapRouteData, isActive: boolean) {
+function drawFallback(AMap: any, map: any, r: MapRouteData) {
   if (!Array.isArray(r.path) || r.path.length < 2) return;
   map.add(
     new AMap.Polyline({
       path: r.path.map((p) => p),
       strokeColor: MODE_COLOR[r.mode],
       strokeWeight: 6,
-      strokeOpacity: isActive ? 0.95 : 0.5,
+      strokeOpacity: 0.9,
       strokeStyle: "dashed",
       lineJoin: "round",
       lineCap: "round",

@@ -363,3 +363,19 @@ export async function* translateLangGraphStream(
     ctx.streamCtx.totalUsage.totalTokens += totalUsage.totalTokens
   }
 }
+
+// 高德公交换乘（AMap.Transfer）前端构造必填 city，从工具入参 argsPreview 中解析
+// argsPreview 可能被截断（>200 字符加省略号）→ JSON.parse 可能失败，用正则兜底
+function parseCityFromArgs(argsPreview?: string): string | undefined {
+  if (!argsPreview) return undefined
+  try {
+    const obj = JSON.parse(argsPreview) as Record<string, unknown>
+    const city = obj.city ?? obj.cityd ?? obj.origin_city
+    if (typeof city === 'string' && city.trim()) return city.trim()
+  } catch {
+    // argsPreview 被截断导致 JSON 解析失败，退化为正则提取 "city":"xxx"
+    const m = argsPreview.match(/"city"\s*:\s*"([^"]+)"/)
+    if (m && m[1].trim()) return m[1].trim()
+  }
+  return undefined
+}

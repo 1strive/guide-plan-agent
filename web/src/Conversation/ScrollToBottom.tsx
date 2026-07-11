@@ -4,7 +4,7 @@ import { IconChevronDown } from "../components/Icons";
 /**
  * 设计稿对齐：右下角浮动「回到底部」按钮。
  *
- * 监听传入容器的 scroll 事件，当距底部 > 100px 时显示，点击平滑回到底部。
+ * 监听传入容器的 scroll 事件，当距底部 > 30px 时显示，点击平滑回到底部。
  * 由父级 MessageList 传入容器 ref；按钮使用 absolute 定位（父级需 relative）。
  */
 export function ScrollToBottom({
@@ -19,7 +19,7 @@ export function ScrollToBottom({
     if (!el) return;
     const onScroll = () => {
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-      setVisible(distance > 100);
+      setVisible(distance > 30);
     };
     onScroll();
     el.addEventListener("scroll", onScroll, { passive: true });
