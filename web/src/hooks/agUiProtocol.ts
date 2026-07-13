@@ -163,18 +163,23 @@ const protocolHandlers: ProtocolHandlerEntry[] = [
     },
     {
         /**
-         * MAP_ROUTE：后端识别高德 MCP 路径规划工具的结果后下发的路线数据
-         * 前端据此渲染可交互导航地图（详见 Conversation/RouteMapView.tsx）
+         * MAP_ROUTE：后端 plan_route 工具下发的路线数据（三要素 → 有序 points）
+         * 前端据此用 AMap 名称形式检索渲染可交互导航地图（详见 Conversation/RouteMapView.tsx）
          *
-         * Task — 高德导航地图渲染 Task 5
+         * Task — 高德导航地图渲染
          * 八股：04-工具调用.md §6 MCP 协议
          */
         when: 'MAP_ROUTE',
         action: (state, event) => {
             const data = event as unknown as MapRouteData & { type: string }
-            if (!Array.isArray(data.path) || data.path.length < 2) return
+            // 名称形式（points）或坐标形式（path）至少一种可用，否则无法渲染
+            const hasPoints = Array.isArray(data.points) && data.points.length >= 2
+            const hasPath = Array.isArray(data.path) && data.path.length >= 2
+            if (!hasPoints && !hasPath) return
             state.mapRoutes.push({
                 mode: data.mode,
+                points: data.points,
+                isLoop: data.isLoop,
                 origin: data.origin,
                 destination: data.destination,
                 path: data.path,

@@ -26,8 +26,8 @@ const MODE_COLOR: Record<MapRouteData["mode"], string> = {
   transit: "#7c3aed",
 };
 
-/** 前端始终展示的交通方式顺序（默认选中第一个＝驾车） */
-const ALL_MODES: MapRouteData["mode"][] = [
+/** 前端展示的交通方式顺序（仅用于多条路线同时下发时的 Tab 排序） */
+const MODE_ORDER: MapRouteData["mode"][] = [
   "driving",
   "transit",
   "walking",
@@ -35,39 +35,32 @@ const ALL_MODES: MapRouteData["mode"][] = [
 ];
 
 /**
- * 路线地图组件（含交通工具切换）
+ * 路线地图组件
  *
- * 实现思路（高德官方 JS API 2.0 标准做法）：
- * - 构造 Driving/Walking/Riding/Transfer 时传入 `map`，调用 `search()` 后
- *   插件会「自动把规划出的曲线导航线绘制到地图上」（官方教程 §2），无需手动画折线
- * - 注意：官方方法名是 search()，不是 plan()
- * - 同一消息内多种出行方式 → 单张地图 + Tab 切换（切 Tab → 重建地图重新 search）
+ * 实现思路（高德官方 JS API 2.0 名称形式检索）：
+ * - 后端 plan_route 工具下发确定的单一 mode + 有序 points（地点名称）
+ * - 前端构造 Driving/Walking/Riding/Transfer 时传入 map，用名称形式
+ *   search([{keyword,city}...]) → 高德内部地理编码并自动绘制导航线 + 起终点 marker
+ * - 首=起点、末=终点、中间=途经点（支持多目的地/环线）；环线由后端在末尾补回起点
+ * - 公交（Transfer）名称形式仅取首/末两点，途经点忽略（AMap 限制）
  *
- * 全交通方式补全（根治「只渲染公交」）：
- * - 后端无论 LLM 调了哪一种路径工具，只需下发含起终点的 MAP_ROUTE 即可
- * - 前端据同一对起终点，对驾车/公交/步行/骑行「各自」用对应插件规划 → 恒定展示全部 Tab
- * - 这样既覆盖「从A到B怎么走」，也覆盖「行程规划中的路线段」，且不依赖 LLM 多次调工具
+ * 按需求：只渲染意图确定的单一出行方式，不再强制展开全部 4 个 Tab。
+ * 若同一消息意外下发多条 MAP_ROUTE，保留多 Tab 切换能力。
  */
 export function RouteMapView({ routes }: { routes: MapRouteData[] }) {
   if (!routes || routes.length === 0) return null;
-  // 取任一含起终点的后端路线作为基准（起终点坐标 + 名称 + 城市）
-  const base = routes.find((r) => r.origin && r.destination) ?? routes[0];
-  if (!base?.origin || !base?.destination) return <MapCard routes={routes} />;
-  // 以基准起终点补全全部交通方式：已有后端数据的复用，其余用起终点占位（前端插件现算）
-  const expanded: MapRouteData[] = ALL_MODES.map((mode) => {
-    const existing = routes.find((r) => r.mode === mode);
-    if (existing) return existing;
-    return {
-      mode,
-      origin: base.origin,
-      destination: base.destination,
-      originName: base.originName,
-      destinationName: base.destinationName,
-      city: base.city,
-      path: base.path,
-    };
-  });
-  return <MapCard routes={expanded} />;
+  // 只保留可渲染的路线（名称形式 points 或坐标形式 path 至少一种）
+  const renderable = routes.filter(
+    (r) =>
+      (Array.isArray(r.points) && r.points.length >= 2) ||
+      (Array.isArray(r.path) && r.path.length >= 2),
+  );
+  if (renderable.length === 0) return null;
+  // 多条路线时按固定出行方式顺序排列 Tab（通常只有一条）
+  const ordered = [...renderable].sort(
+    (a, b) => MODE_ORDER.indexOf(a.mode) - MODE_ORDER.indexOf(b.mode),
+  );
+  return <MapCard routes={ordered} />;
 }
 
 function MapCard({ routes }: { routes: MapRouteData[] }) {
@@ -87,9 +80,11 @@ function MapCard({ routes }: { routes: MapRouteData[] }) {
   const routesKey = useMemo(
     () =>
       routes
-        .map(
-          (r) => `${r.mode}:${r.origin?.join(",")}>${r.destination?.join(",")}`,
-        )
+        .map((r) => {
+          const pts = r.points?.map((p) => p.name).join(">") ?? "";
+          const coords = `${r.origin?.join(",")}>${r.destination?.join(",")}`;
+          return `${r.mode}:${pts}|${coords}`;
+        })
         .join("|"),
     [routes],
   );
@@ -129,7 +124,9 @@ function MapCard({ routes }: { routes: MapRouteData[] }) {
         map = new AMap.Map(container, { resizeEnable: true, zooms: [3, 18] });
 
         const r = activeRoute;
-        if (!r.origin || !r.destination) {
+        const usePoints = Array.isArray(r.points) && r.points.length >= 2;
+        const useCoords = !!(r.origin && r.destination);
+        if (!usePoints && !useCoords) {
           setStatus("no-route");
           return;
         }
@@ -147,7 +144,7 @@ function MapCard({ routes }: { routes: MapRouteData[] }) {
           return;
         }
 
-        // 构造：传入 map → search 完成后自动绘制曲线导航线（官方标准）
+        // 构造：传入 map → search 完成后自动绘制曲线导航线 + 起终点 marker（官方标准）
         // 公交换乘（Transfer）额外需要 city（官方必填），缺失用后端下发的 route.city，再兜底 '全国'
         const plannerOpts: Record<string, unknown> = { map };
         if (r.mode === "driving") plannerOpts.policy = 0; // 0 = 速度优先
@@ -160,7 +157,7 @@ function MapCard({ routes }: { routes: MapRouteData[] }) {
             ? planner.search.bind(planner)
             : planner.plan.bind(planner);
 
-        doSearch(r.origin, r.destination, (s: string, data: unknown) => {
+        const onResult = (s: string, data: unknown) => {
           if (destroyed) return;
           // ── 关键调试：打印插件返回的完整数据结构 ──
           console.log(
@@ -183,9 +180,24 @@ function MapCard({ routes }: { routes: MapRouteData[] }) {
             drawFallback(AMap, map, r);
           }
           if (!destroyed) finishView(AMap, map, r);
-        });
+        };
 
-        // 起终点标注 + 视野自适应（自动绘制线也会 fitView，这里补 marker）
+        if (usePoints) {
+          // 名称形式检索：[{keyword, city}...]；首=起点、末=终点、中间=途经点
+          // 高德内部地理编码后自动绘线，支持多目的地/环线（环线由后端在末尾补回起点）
+          const kw = r.points!.map((p) => ({
+            keyword: p.name,
+            city: p.city ?? r.city,
+          }));
+          // 公交（Transfer）名称形式仅支持首/末两点，途经点忽略（AMap 限制）
+          const args = r.mode === "transit" ? [kw[0], kw[kw.length - 1]] : kw;
+          doSearch(args, onResult);
+        } else {
+          // 坐标形式兜底：直接用起终点经纬度
+          doSearch(r.origin, r.destination, onResult);
+        }
+
+        // 起终点标注 + 视野自适应（名称形式下插件已自绘 marker，此处坐标缺失则仅 fitView）
         finishView(AMap, map, r);
         setStatus("ready");
       })

@@ -24,6 +24,7 @@ import { randomUUID } from 'node:crypto'
 import {
   type AgUiEvent,
   type Source,
+  type MapRouteEvent,
   createRunError,
   createStepStarted,
   createStepFinished,
@@ -39,7 +40,6 @@ import {
   createThinkingEnd,
   createMapRoute
 } from './ag-ui.js'
-import { isAmapRouteTool, parseAmapRoute, AMAP_ROUTE_TOOL_MODE } from './amapRoute.js'
 import type { TokenUsage } from './token-usage.js'
 import type { StreamContext } from './langgraph-agent.js'
 import {
@@ -52,6 +52,8 @@ import {
 // Task 4.5:移除旧的 [ASK_USER] 文本协议解析，改用 LangGraph 原生 interrupt
 // ask_user 工具的 run_id 跟踪集合（用于过滤内部工具事件）
 const ASK_USER_TOOL_NAME = 'ask_user'
+// 路线改造:plan_route 工具输出路线三要素，adapter 在 on_tool_end 拦截转 MAP_ROUTE
+const PLAN_ROUTE_TOOL_NAME = 'plan_route'
 
 // Task 4.1.B:可选 logger 接口(对齐 pino,只用 info 一层即够;不强依赖 pino,便于单测注入 stub)
 export type AdapterLogger = {
@@ -307,38 +309,28 @@ export async function* translateLangGraphStream(
           yield createToolCallResult(toolCallId, String(text))
           yield createStepFinished('tool_execution')
 
-          // 高德 MCP 路径规划工具：额外解析路线数据 → MAP_ROUTE 事件（前端渲染导航地图）
-          // 八股 04 §6 MCP 协议：解析失败不发事件，不阻断主流程，只走普通工具 chip 通道
-          if (isAmapRouteTool(toolName)) {
-            const mode = AMAP_ROUTE_TOOL_MODE[toolName]!
-            const parsed = parseAmapRoute(mode, output)
-            if (parsed) {
-              // 公交换乘需 city（AMap.Transfer 前端构造必填），从工具入参 argsPreview 解析
-              const city = parseCityFromArgs(started?.argsPreview)
-              yield createMapRoute(randomUUID(), parsed.mode, parsed.path, {
-                origin: parsed.origin,
-                destination: parsed.destination,
-                originName: parsed.originName,
-                destinationName: parsed.destinationName,
-                distanceMeters: parsed.distanceMeters,
-                durationSeconds: parsed.durationSeconds,
-                city
+          // 路线渲染：plan_route 工具输出路线三要素（出发地/目的地/出行方式），
+          // 解析后组装成有序 points（名称形式）下发 MAP_ROUTE，前端用 AMap 名称形式检索渲染。
+          // 八股 04 §6 MCP 协议：坐标解析交给前端 AMap JS API，后端只传地点名称 + 城市
+          if (toolName === PLAN_ROUTE_TOOL_NAME) {
+            const intent = parsePlanRouteOutput(output)
+            if (intent) {
+              // 有序路线点：首=起点、末=终点、中间=途经点；环线在末尾补回起点
+              const points: Array<{ name: string; city?: string }> = [
+                { name: intent.origin, city: intent.city },
+                ...intent.destinations.map((name) => ({ name, city: intent.city }))
+              ]
+              if (intent.isLoop) points.push({ name: intent.origin, city: intent.city })
+              yield createMapRoute(randomUUID(), intent.mode, undefined, {
+                points,
+                isLoop: intent.isLoop,
+                originName: intent.origin,
+                destinationName: intent.destinations[intent.destinations.length - 1],
+                city: intent.city
               })
               ctx.log?.info(
-                { tool: toolName, toolCallId, points: parsed.path.length },
-                'map route parsed'
-              )
-            } else {
-              // 调试日志：打印 output 实际类型与前 500 字符，定位解析失败原因
-              const outType = output === null ? 'null' : Array.isArray(output) ? 'array' : typeof output
-              const outShape = (() => {
-                if (output === null || output === undefined) return String(output)
-                const s = typeof output === 'string' ? output : JSON.stringify(output)
-                return s.length > 500 ? s.slice(0, 500) + '…' : s
-              })()
-              ctx.log?.info(
-                { tool: toolName, toolCallId, outputType: outType, outputShape: outShape },
-                'map route parse skipped or failed'
+                { tool: toolName, toolCallId, points: points.length, mode: intent.mode },
+                'plan route emitted'
               )
             }
           }
@@ -364,18 +356,34 @@ export async function* translateLangGraphStream(
   }
 }
 
-// 高德公交换乘（AMap.Transfer）前端构造必填 city，从工具入参 argsPreview 中解析
-// argsPreview 可能被截断（>200 字符加省略号）→ JSON.parse 可能失败，用正则兜底
-function parseCityFromArgs(argsPreview?: string): string | undefined {
-  if (!argsPreview) return undefined
+// plan_route 工具输出（JSON 字符串）→ 路线意图对象；解析失败返回 null 不发事件
+type PlanRouteIntent = {
+  origin: string
+  destinations: string[]
+  mode: MapRouteEvent['mode']
+  city?: string
+  isLoop?: boolean
+}
+
+function parsePlanRouteOutput(output: unknown): PlanRouteIntent | null {
   try {
-    const obj = JSON.parse(argsPreview) as Record<string, unknown>
-    const city = obj.city ?? obj.cityd ?? obj.origin_city
-    if (typeof city === 'string' && city.trim()) return city.trim()
+    // on_tool_end 的 output 可能是字符串，也可能被包成 { content: '<json>' }
+    const raw =
+      typeof output === 'string'
+        ? output
+        : (output as { content?: string } | null)?.content
+    if (typeof raw !== 'string') return null
+    const obj = JSON.parse(raw) as Partial<PlanRouteIntent>
+    if (!obj.origin || !Array.isArray(obj.destinations) || obj.destinations.length === 0) return null
+    if (!obj.mode) return null
+    return {
+      origin: obj.origin,
+      destinations: obj.destinations,
+      mode: obj.mode,
+      city: obj.city,
+      isLoop: !!obj.isLoop
+    }
   } catch {
-    // argsPreview 被截断导致 JSON 解析失败，退化为正则提取 "city":"xxx"
-    const m = argsPreview.match(/"city"\s*:\s*"([^"]+)"/)
-    if (m && m[1].trim()) return m[1].trim()
+    return null
   }
-  return undefined
 }

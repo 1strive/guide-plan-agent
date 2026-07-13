@@ -327,39 +327,40 @@ Run 执行出错(LLM 超时 / 工具失败 / 内部异常)。通常紧跟 RUN_FI
 
 #### MAP_ROUTE
 
-后端识别高德 MCP 路径规划工具（`maps_direction_*`、`maps_bicycling`）的输出后，解析出路线坐标下发前端渲染导航地图。
-紧跟在对应 `TOOL_CALL_RESULT` 之后发射，解析失败时不发此事件。
+后端 `plan_route` 工具下发的路线数据：Agent 抽取出发地/目的地/出行方式三要素后，adapter 将其组装成**有序 `points`（名称形式）**下发。
+紧跟在 `plan_route` 的 `TOOL_CALL_RESULT` 之后发射，解析失败时不发此事件。坐标解析交给前端 AMap JS API 名称形式检索，后端只传地点名称 + 城市。
 
 ```json
 {
   "type": "MAP_ROUTE",
   "messageId": "route-msg-uuid",
   "mode": "driving",
-  "origin": [116.397428, 39.90923],
-  "destination": [116.407526, 39.904030],
-  "originName": "北京西站",
-  "destinationName": "故宫",
-  "path": [[116.3974,39.9092],[116.3980,39.9085], ...],
-  "distanceMeters": 1234,
-  "durationSeconds": 420,
+  "points": [
+    { "name": "兰州", "city": "兰州" },
+    { "name": "莫高窟", "city": "敦煌" },
+    { "name": "青海湖", "city": "海北" },
+    { "name": "兰州", "city": "兰州" }
+  ],
+  "isLoop": true,
+  "originName": "兰州",
+  "destinationName": "青海湖",
+  "city": "兰州",
   "timestamp": ...
 }
 ```
 
-| 字段            | 说明                                                           |
-| --------------- | -------------------------------------------------------------- |
-| mode            | 出行方式：`driving` / `walking` / `transit` / `bicycling`      |
-| origin          | 起点坐标 `[lng, lat]`（可选，解析失败时后端用 path 首尾兜底）  |
-| destination     | 终点坐标 `[lng, lat]`                                          |
-| originName      | 起点名称（供 Marker 标注）                                     |
-| destinationName | 终点名称                                                       |
-| path            | 折线坐标点数组（各 step polyline 拼接、相邻去重，至少 2 个点） |
-| distanceMeters  | 全程距离（米）                                                 |
-| durationSeconds | 全程耗时（秒）                                                 |
+| 字段                                                           | 说明                                                                          |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| mode                                                           | 出行方式（意图确定的单一值）：`driving` / `walking` / `transit` / `bicycling` |
+| points                                                         | **主路径**：有序地点名称数组，首=起点、末=终点、中间=途经点（至少 2 个）      |
+| isLoop                                                         | 是否环线（终点回到起点）；true 时 adapter 已在 points 末尾补回起点            |
+| city                                                           | 公交（transit）构造必填城市，其余方式用于名称检索消歧                         |
+| originName / destinationName                                   | 起/终点名称（供标注/展示）                                                    |
+| origin / destination / path / distanceMeters / durationSeconds | 坐标形式兜底字段（可选；名称形式下由前端插件现算）                            |
 
-**前端动作**:在 `AssistantBubble` 内渲染 `RouteMapView`（AMap JS API），画折线 + 起终点 Marker，footer 显示出行方式/距离/耗时；未配置 `VITE_AMAP_JS_KEY` 时渲染占位提示。
+**前端动作**:在 `AssistantBubble` 内渲染 `RouteMapView`（AMap JS API），**按确定的单一 mode** 用名称形式 `search([{keyword,city}...])` 让高德内部地理编码并自动绘线 + 起终点 Marker（支持多目的地/环线；公交仅取首/末两点），footer 显示出行方式/距离/耗时；未配置 `VITE_AMAP_JS_KEY` 时渲染占位提示。不再强制展开全部 4 个 Tab。
 
-> 对应后端：`src/agent/amapRoute.ts`(解析) + `src/agent/langgraphToAgUi.ts`(识别路径工具并发事件)。
+> 对应后端：`src/agent/planRouteTool.ts`（三要素槽位填充 + interrupt 反问） + `src/agent/langgraphToAgUi.ts`（拦截 plan_route 输出并发 MAP_ROUTE）。
 > 前端：`web/src/Conversation/RouteMapView.tsx`。
 
 ---
@@ -485,21 +486,21 @@ RUN_STARTED
 
 ## 5. 前端渲染优先级建议
 
-| 事件                    |   优先级    | 建议 UI                                        |
-| ----------------------- | :---------: | ---------------------------------------------- |
-| TEXT_MESSAGE_CONTENT    | **P0 必须** | 主回答区,流式追加文本                          |
-| RUN_FINISHED(interrupt) | **P0 必须** | 反问文本 + 选项按钮                            |
-| RUN_ERROR               | **P0 必须** | 错误提示(红色/警告样式)                        |
-| MAP_ROUTE               | **P1 推荐** | 在气泡内渲染高德交互地图(折线/起终点/距离耗时) |
-| TOOL_CALL_START         | **P1 推荐** | 工具调用 chip(工具名 + ⏳ loading)             |
-| TOOL_CALL_END           | **P1 推荐** | chip 状态 ⏳ → ✅                              |
-| THINKING_CONTENT        | **P1 推荐** | 折叠区"思考过程",灰色小字,默认收起             |
-| TOOL_CALL_RESULT        |   P2 可选   | 展开查看工具返回结果(JSON 格式化)              |
-| TOOL_CALL_ARGS          |   P2 可选   | 展开查看工具入参                               |
-| STEP_STARTED/FINISHED   |   P2 可选   | 顶部进度条 / 阶段标签                          |
-| RUN_STARTED             |   P3 内部   | 存 runId,不渲染                                |
-| TEXT_MESSAGE_START/END  |   P3 内部   | 控制流边界,不直接渲染                          |
-| THINKING_START/END      |   P3 内部   | 控制 thinking 折叠区显隐                       |
+| 事件                    |   优先级    | 建议 UI                                                                      |
+| ----------------------- | :---------: | ---------------------------------------------------------------------------- |
+| TEXT_MESSAGE_CONTENT    | **P0 必须** | 主回答区,流式追加文本                                                        |
+| RUN_FINISHED(interrupt) | **P0 必须** | 反问文本 + 选项按钮                                                          |
+| RUN_ERROR               | **P0 必须** | 错误提示(红色/警告样式)                                                      |
+| MAP_ROUTE               | **P1 推荐** | 在气泡内渲染高德交互地图（名称形式检索、单一 mode、支持多点/环线、距离耗时） |
+| TOOL_CALL_START         | **P1 推荐** | 工具调用 chip(工具名 + ⏳ loading)                                           |
+| TOOL_CALL_END           | **P1 推荐** | chip 状态 ⏳ → ✅                                                            |
+| THINKING_CONTENT        | **P1 推荐** | 折叠区"思考过程",灰色小字,默认收起                                           |
+| TOOL_CALL_RESULT        |   P2 可选   | 展开查看工具返回结果(JSON 格式化)                                            |
+| TOOL_CALL_ARGS          |   P2 可选   | 展开查看工具入参                                                             |
+| STEP_STARTED/FINISHED   |   P2 可选   | 顶部进度条 / 阶段标签                                                        |
+| RUN_STARTED             |   P3 内部   | 存 runId,不渲染                                                              |
+| TEXT_MESSAGE_START/END  |   P3 内部   | 控制流边界,不直接渲染                                                        |
+| THINKING_START/END      |   P3 内部   | 控制 thinking 折叠区显隐                                                     |
 
 ---
 

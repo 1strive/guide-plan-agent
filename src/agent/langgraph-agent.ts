@@ -33,6 +33,7 @@ import {
 import type { ChatMessage, TokenUsage } from './llm.js'
 import { translateLangGraphStream, type AdapterLogger } from './langgraphToAgUi.js'
 import { askUserTool } from './askUserTool.js'
+import { planRouteTool } from './planRouteTool.js'
 
 /**
  * 共享上下文：adapter 填充 usage/sources，caller 在终态事件中使用
@@ -91,10 +92,11 @@ function buildAgent(
 ) {
   const model = buildChatModel(config)
   // Task 4.5:ask_user 工具注入到工具列表末尾
+  // 路线改造:plan_route 工具同样注入，作为路线三要素槽位填充 + interrupt 反问入口
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return createAgent({
     model,
-    tools: [...tools, askUserTool] as any,
+    tools: [...tools, askUserTool, planRouteTool] as any,
     systemPrompt,
     checkpointer
   } as any)
@@ -185,7 +187,7 @@ export async function* runLangGraphAgent(
   })
 
   options?.log?.info(
-    { model: config.OPENAI_MODEL, toolCount: tools.length + 1, runId },
+    { model: config.OPENAI_MODEL, toolCount: tools.length + 2, runId },
     'agent run started'
   )
 

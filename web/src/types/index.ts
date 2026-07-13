@@ -75,16 +75,24 @@ export type ChatMsg = {
   mapRoutes?: MapRouteData[]
 }
 
-/** 高德 MCP 路径规划工具返回的结构化数据（用于地图渲染） */
+/** 高德路线规划结构化数据（用于地图渲染），由 plan_route 工具下发 */
 export type MapRouteData = {
   mode: 'driving' | 'walking' | 'transit' | 'bicycling'
+  /**
+   * 有序路线点（名称形式，主路径）：首=起点、末=终点、中间=途经点。
+   * 前端用 AMap 名称形式 search([{keyword,city}...]) 渲染，支持多目的地与环线。
+   */
+  points?: Array<{ name: string; city?: string }>
+  /** 是否环线（终点回到起点） */
+  isLoop?: boolean
   origin?: [number, number]
   destination?: [number, number]
-  path: Array<[number, number]>
+  /** 折线坐标点（坐标形式兜底；名称形式下由前端插件现算，可为空） */
+  path?: Array<[number, number]>
   distanceMeters?: number
   durationSeconds?: number
   originName?: string
   destinationName?: string
-  /** 公交换乘所需城市（AMap.Transfer 构造必填），后端从工具入参解析下发 */
+  /** 公交换乘所需城市（AMap.Transfer 构造必填） */
   city?: string
 }

@@ -168,20 +168,28 @@ export type AskUserEvent = BaseEvent & {
 }
 
 // ─── MAP_ROUTE Event ───
-// 后端识别高德 MCP 路径规划工具（maps_direction_*、maps_bicycling）的结果后，
-// 解析出路线折线、起终点、距离耗时下发前端；前端用 AMap JS API 渲染交互地图。
-// 八股 04 §6 MCP 协议：MCP 返回结构不可控，故后端采用防御性解析（见 amapRoute.ts）
+// 由 plan_route 工具下发：Agent 抽取出发地/目的地/出行方式三要素后，
+// adapter 组装成有序 points（名称形式）下发前端；前端用 AMap JS API
+// 名称形式检索渲染交互地图，支持多目的地与环线。
+// 八股 04 §6 MCP 协议：坐标解析交给前端 AMap JS API，后端只传地点名称 + 城市
 export type MapRouteEvent = BaseEvent & {
     type: EventType.MAP_ROUTE
     messageId: string
     /** 出行方式：driving=驾车 walking=步行 transit=公交 bicycling=骑行 */
     mode: 'driving' | 'walking' | 'transit' | 'bicycling'
-    /** 起点坐标 [lng, lat] */
+    /**
+     * 有序路线点（名称形式，主路径）：首=起点、末=终点、中间=途经点。
+     * 由 plan_route 工具下发，前端用 AMap 名称形式 search([{keyword,city}...]) 渲染。
+     */
+    points?: Array<{ name: string; city?: string }>
+    /** 是否环线（终点回到起点），如「西北大环线」；true 时前端在末尾补回起点 */
+    isLoop?: boolean
+    /** 起点坐标 [lng, lat]（坐标形式，兜底/兼容） */
     origin?: [number, number]
-    /** 终点坐标 [lng, lat] */
+    /** 终点坐标 [lng, lat]（坐标形式，兜底/兼容） */
     destination?: [number, number]
-    /** 折线坐标点（由各 step polyline 拼接并相邻去重） */
-    path: Array<[number, number]>
+    /** 折线坐标点（坐标形式兜底；名称形式下由前端插件现算，可为空） */
+    path?: Array<[number, number]>
     /** 全程距离（米） */
     distanceMeters?: number
     /** 全程耗时（秒） */
@@ -322,6 +330,8 @@ export function createMapRoute(
     mode: MapRouteEvent['mode'],
     path: MapRouteEvent['path'],
     opts?: {
+        points?: Array<{ name: string; city?: string }>
+        isLoop?: boolean
         origin?: [number, number]
         destination?: [number, number]
         originName?: string
@@ -336,6 +346,8 @@ export function createMapRoute(
         messageId,
         mode,
         path,
+        points: opts?.points,
+        isLoop: opts?.isLoop,
         origin: opts?.origin,
         destination: opts?.destination,
         originName: opts?.originName,

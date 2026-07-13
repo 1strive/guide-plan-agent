@@ -98,8 +98,8 @@
 | Web 搜索缓存                           | `src/agent/webSearchCache.ts`                      | Tavily 调用结果 SHA-256(query+depth) → PostgreSQL `web_search_cache` 表,TTL 默认 24h(`WEB_SEARCH_CACHE_TTL_SECONDS`),避免烧 Tavily 免费额度                                                                                                                                                                    | 不调 Tavily、不知道工具语义                               |
 | AG-UI 协议                             | `src/agent/ag-ui.ts`                               | 事件类型枚举 + 构造器(RUN*STARTED / TEXT_MESSAGE*_ / TOOL*CALL*_ / **THINKING\_\*** Task 4.1 / **PLAN_GENERATED** Task 4.2 / **MAP_ROUTE** 导航地图 / RUN_FINISHED);**`Source` 是 discriminated union `DestinationSource \| UrlSource`**(Task 4.0)                                                             | 不含业务逻辑                                              |
 | **think 切分(Task 4.1)**               | `src/agent/thinkSplit.ts`                          | 纯函数 + 显式 state 的跨 chunk `<think>...</think>` 切分;adapter 把 think 段当 THINKING_CONTENT 事件,把外部段当 TEXT_MESSAGE_CONTENT                                                                                                                                                                           | 不发事件、不知 AG-UI;单测覆盖 11 个边界                   |
-| **高德路线解析(导航地图渲染)**         | `src/agent/amapRoute.ts`                           | `parseAmapRoute` 防御性解析高德 MCP 路径规划工具(`maps_direction_*` / `maps_bicycling`)返回结构;adapter 识别路径工具后调用,成功则额外发 `MAP_ROUTE` 事件                                                                                                                                                       | 不发事件、不调 MCP;只输出结构化结果或 null                |
-| RouteMapView(前端地图渲染)             | `web/src/Conversation/RouteMapView.tsx`            | 用 AMap JS API 渲染可交互导航地图;**从后端下发的任一含起终点的 `MapRouteData` 提取起终点,前端对驾车/公交/步行/骑行「各自」用对应插件 `search()` 现算并绘制曲线 → 恒定输出全交通方式 Tab**(根治「只渲染公交」);未配置 `VITE_AMAP_JS_KEY` 时渲染占位                                                             | 不消费后端 MCP,只根据 `MapRouteData` 渲染                 |
+| **路线三要素工具(plan_route)**         | `src/agent/planRouteTool.ts`                       | 结构化工具:Agent 抽取出发地/目的地/出行方式三要素;`origin` 空 → interrupt 问出发地,`mode` 空 → interrupt 问出行方式(确定性反问不依赖 LLM);输出 JSON 由 adapter 转 MAP_ROUTE                                                                                                                                    | 不解析坐标(交前端)、不发事件                              |
+| RouteMapView(前端地图渲染)             | `web/src/Conversation/RouteMapView.tsx`            | 用 AMap JS API 渲染可交互导航地图;**按后端确定的单一 mode + 有序 `points`(名称形式)用 `search([{keyword,city}...])` 让高德内部地理编码并自动绘线**,支持多目的地/环线(公交仅首/末两点);不再强制展开全 Tab;未配置 `VITE_AMAP_JS_KEY` 时渲染占位                                                                  | 不消费后端 MCP,只根据 `MapRouteData` 渲染                 |
 | Sanitize 安全                          | `src/agent/sanitize.ts`                            | `detectInjection` 入口注入检测 / `wrapUntrusted` 边界标记 / `detectSystemLeak` 出口泄露检测(纯函数)                                                                                                                                                                                                            | 不发日志、不修改输入,只返回判定结果                       |
 | Token Usage                            | `src/agent/token-usage.ts`                         | `estimateTokens` 兜底估算、`accumulateUsage` 累加                                                                                                                                                                                                                                                              | 不写 DB                                                   |
 | Chat 持久化                            | `src/db/chatRepo.ts`                               | chat_sessions / chat_messages 的 CRUD                                                                                                                                                                                                                                                                          | 不知道 LLM、不调工具                                      |
@@ -401,7 +401,7 @@ RUN_STARTED
   → STEP_FINISHED(tool_call)
   → STEP_STARTED(tool_execution)
   →   TOOL_CALL_RESULT
-  →   [MAP_ROUTE]?  ← 高德 MCP 路径规划工具命中时额外下发(供前端渲染导航地图)
+  →   [MAP_ROUTE]?  ← plan_route 工具命中时额外下发(供前端渲染导航地图)
   → STEP_FINISHED(tool_execution)
 [回到 LLM 下一轮]
 
@@ -543,9 +543,9 @@ langgraphToAgUi.ts on_tool_end:
 
 ### 4.5 导航地图渲染链路(MAP_ROUTE,从用户输入到前端渲染)★
 
-> **能力定位**:导航渲染不只服务「从A到B怎么走」的直接提问,也服务**行程/游玩路线规划**——只要 LLM 在回答里涉及地点间移动并调用了路径规划工具,前端就会渲染可切换交通方式的导航地图。
+> **能力定位**:导航渲染不只服务「从A到B怎么走」的直接提问,也服务**行程/游玩路线规划**——只要 Agent 识别出「涉及地点间移动」的意图,就通过 `plan_route` 工具产出路线并渲染可交互地图。
 
-**核心设计(根治「只渲染公交」)**:后端**无论 LLM 调了哪一种/几种路径工具**,只需下发**含起终点的 `MAP_ROUTE`** 即可;前端 `RouteMapView` 拿到起终点后,**对驾车/公交/步行/骑行四种方式各自用对应 AMap 插件 `search()` 现算并绘制曲线**,恒定输出全部 Tab。这样既不依赖 LLM 一次调多个工具(不可靠),又保证四种方式都可切换对比。
+**核心设计(三要素槽位 + 确定性反问)**:路线渲染统一走 `plan_route` 结构化工具,Agent 显式抽取**出发地 / 目的地(可多个) / 出行方式**三要素;`origin` 空 → 工具内 `interrupt()` 问出发地,`mode` 空 → `interrupt()` 问出行方式(4 选项)。反问不依赖 LLM 自觉,天然满足「缺项必反问」。**坐标解析交给前端**:后端只下发地点名称 + 城市,前端 `RouteMapView` 用 AMap 名称形式 `search([{keyword,city}...])` 让高德内部地理编码并绘线,支持多目的地/环线。**只渲染意图确定的单一 mode**,不再强制展开全部 Tab。
 
 ```
 ① 用户输入
@@ -553,72 +553,71 @@ langgraphToAgUi.ts on_tool_end:
    POST /sessions/:id/stream { message }
         │
         ▼
-② 后端拼 messages + 系统提示词(含导航规则)
+② 后端拼 messages + 系统提示词(含 plan_route 规则)
    src/index.ts POST /stream → getPrompt(v1_base)
-   toolUsageRules:「涉及地点间移动时调用高德路径规划工具,至少调一次」
+   toolUsageRules:「涉及地点间移动时调 plan_route,填三要素,未知项留空由工具反问」
         │
         ▼
-③ LLM ReAct:决定调用高德 MCP 路径工具
-   maps_direction_driving / _walking / _transit_integrated / maps_bicycling
-   (由 MCP Server 动态发现,src/mcp/client.ts)
+③ LLM ReAct:抽取三要素 → 调用 plan_route 工具
+   src/agent/planRouteTool.ts { origin, destinations[], mode?, city?, isLoop? }
+   → origin 空 → interrupt 问出发地;mode 空 → interrupt 问出行方式
+     (interrupt 复用 LangGraph 原生机制 + PostgresSaver checkpoint,支持跨会话 resume)
+   → 三要素齐备 → 返回 JSON { origin, destinations, mode, city, isLoop }
         │
         ▼
-④ 工具执行 → LangGraph on_tool_end 拿到 output(LangChain ToolMessage)
-   src/agent/langgraphToAgUi.ts:307 先发普通 TOOL_CALL_RESULT
+④ 工具执行 → LangGraph on_tool_end 拿到 output
+   src/agent/langgraphToAgUi.ts 先发普通 TOOL_CALL_RESULT
         │
         ▼
-⑤ 识别路径工具 → 解析路线结构
-   langgraphToAgUi.ts:312 isAmapRouteTool(toolName)
-   → AMAP_ROUTE_TOOL_MODE[toolName] 映射 mode
-   → src/agent/amapRoute.ts parseAmapRoute(mode, output) 防御性解析
-     (提取 path 折线 / origin / destination / distance / time)
-   → parseCityFromArgs(argsPreview) 从工具入参解析 city(公交 Transfer 需要)
+⑤ 识别 plan_route → 解析路线意图
+   langgraphToAgUi.ts toolName === 'plan_route'
+   → parsePlanRouteOutput(output) 解析 JSON(失败返回 null)
+   → 组装有序 points=[起点, ...目的地];isLoop 时末尾补回起点
         │
         ▼
 ⑥ 额外下发 MAP_ROUTE 事件(解析失败则不发,只走普通工具 chip)
-   langgraphToAgUi.ts:318 createMapRoute(id, mode, path, { origin, destination,
-     originName, destinationName, distanceMeters, durationSeconds, city })
-   → SSE data: { type:'MAP_ROUTE', ... }
+   createMapRoute(id, mode, undefined, { points, isLoop, originName,
+     destinationName, city })
+   → SSE data: { type:'MAP_ROUTE', points:[...], mode, ... }
         │
         ▼
 ⑦ 前端协议归约:push 到 state.mapRoutes
-   web/src/hooks/agUiProtocol.ts:172 when:'MAP_ROUTE'
-   → path.length < 2 时丢弃;否则 push { mode, origin, destination, path,
-     distanceMeters, durationSeconds, originName, destinationName, city }
+   web/src/hooks/agUiProtocol.ts when:'MAP_ROUTE'
+   → points.length>=2 或 path.length>=2 才 push;否则丢弃
    (useStreamChat 已把 MAP_ROUTE 加入允许事件白名单)
         │
         ▼
 ⑧ 状态落到消息 → chatStore → MessageBubble 注册表渲染
    ChatMsg.mapRoutes (web/src/types/index.ts)
-   → MessageBubble.tsx:70 片段 key='mapRoutes'
+   → MessageBubble.tsx 片段 key='mapRoutes'
    → <RouteMapView routes={msg.mapRoutes} />(单个组件传整个数组)
         │
         ▼
-⑨ RouteMapView 全交通方式补全 + AMap 现算绘制
+⑨ RouteMapView 按单一 mode + 名称形式检索绘制
    web/src/Conversation/RouteMapView.tsx
-   a. RouteMapView():取任一含起终点的 route 作 base,
-      按 ALL_MODES=[driving,transit,walking,bicycling] 补全 → expanded[4]
-      (已有后端数据的复用,其余用同一起终点占位)
-   b. MapCard():AMapLoader.load 一次性加载全部方式插件(避免缓存陷阱),
-      当前 Tab 用 MODE_PLUGIN 对应构造函数 new PluginCtor({ map, ... }),
-      调 search(origin, destination, cb) → 插件自动绘制曲线导航线
-      + finishView 补起终点 Marker + setFitView;失败走 drawFallback 虚线
-   c. Tab 切换 → activeIdx 变 → 重建地图对新方式重新 search
+   a. RouteMapView():只保留可渲染路线(points 或 path),按 MODE_ORDER 排序(通常仅一条)
+   b. MapCard():AMapLoader.load 加载所需方式插件,
+      new PluginCtor({ map, [transit 时 city] }),
+      名称形式 search([{keyword,city}...], cb)(公交仅取首/末两点)
+      → 插件自动绘制曲线导航线 + 起终点 Marker + fitView;
+      坐标形式(path/origin)作兜底,失败走 drawFallback 虚线
 ```
 
 #### 关键路径要素
 
-| 要素                           | 出处                                                          | 说明                                                                    |
-| ------------------------------ | ------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| **后端只需下发一个 MAP_ROUTE** | `langgraphToAgUi.ts:312-326`                                  | 全方式 Tab 由前端补全,不依赖 LLM 多次调工具                             |
-| **前端全方式补全**             | `RouteMapView.tsx` `ALL_MODES` + `expanded`                   | 取 base 起终点,对 4 种方式各自 `search()` 现算                          |
-| **一次性加载全部插件**         | `RouteMapView.tsx` `AMapLoader.load({ plugins })`             | AMapLoader 首次 load 后缓存 AMap,后续换 plugins 不补加载 → 必须一次全加 |
-| **插件构造函数名去前缀**       | `RouteMapView.tsx` `plugin.replace(/^AMap\./,'')`             | 加载用 `AMap.Transfer`,取构造函数用 `AMap.Transfer`(去前缀)             |
-| **search() 而非 plan()**       | `RouteMapView.tsx` `doSearch`                                 | 官方 JS API 2.0 方法名是 `search`,传 `map` 后自动绘曲线                 |
-| **公交需 city**                | 后端 `parseCityFromArgs` → 事件 city → `agUiProtocol.ts` 透传 | `AMap.Transfer` 构造必填;链路任一环节丢 city → 前端兜底 `'全国'`        |
-| **解析失败不阻断**             | `amapRoute.ts` 返回 null 时不发 MAP_ROUTE                     | 只走普通工具 chip 通道,不影响文本回答                                   |
+| 要素                      | 出处                                                       | 说明                                                              |
+| ------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------- |
+| **plan_route 三要素槽位** | `planRouteTool.ts`                                         | origin/destinations/mode;origin、mode 缺失时工具内 interrupt 反问 |
+| **确定性反问不依赖 LLM**  | `planRouteTool.ts` `interrupt()`                           | 复用 askUserTool 同款机制 + checkpoint,支持 resume                |
+| **坐标解析交给前端**      | 后端只发 `points`(名称+城市)                               | 前端 AMap 名称形式 `search` 内部地理编码,免后端 geocode           |
+| **只渲染单一 mode**       | `RouteMapView.tsx` `MODE_ORDER`                            | 按意图确定的 mode 渲染;不再强制展开全部 Tab                       |
+| **一次性加载所需插件**    | `RouteMapView.tsx` `AMapLoader.load({ plugins })`          | AMapLoader 首次 load 后缓存 AMap,后续换 plugins 不补加载          |
+| **插件构造函数名去前缀**  | `RouteMapView.tsx` `plugin.replace(/^AMap\./,'')`          | 加载用 `AMap.Transfer`,取构造函数用 `AMap.Transfer`(去前缀)       |
+| **search() 而非 plan()**  | `RouteMapView.tsx` `doSearch`                              | 官方 JS API 2.0 方法名是 `search`,传 `map` 后自动绘曲线           |
+| **公交需 city**           | plan_route 入参 city → 事件 city → `agUiProtocol.ts` 透传  | `AMap.Transfer` 构造必填;链路任一环节丢 city → 前端兜底 `'全国'`  |
+| **解析失败不阻断**        | `langgraphToAgUi.ts` parsePlanRouteOutput 返回 null 时不发 | 只走普通工具 chip 通道,不影响文本回答                             |
 
-> **历史演进**:早期让 LLM「同时调多种出行方式工具」由后端下发多个 MAP_ROUTE 聚合,实测模型常只调一个(公交) → 只渲染单一方式。改为**前端据起终点全方式现算**后根治;同时导航能力从「仅 A→B 提问」扩展到「行程规划中的路线段」。
+> **历史演进**:早期让 LLM 自由调高德 MCP `maps_direction_*`,由后端 `amapRoute.ts` 防御性解析下发坐标,前端再对 4 种方式各自现算「恒定展示全 Tab」。实测三要素隐式、无法保证缺项反问,且多目的地/环线无法表达。改为 **plan_route 结构化槽位 + interrupt 确定性反问 + 前端名称形式检索**后:三要素显式可控、缺项必反问、支持多点/环线、按意图渲染单一方式;`amapRoute.ts` 已删除。
 
 ---
 
@@ -781,29 +780,29 @@ LangGraph 的 `MemorySaver` / `SqliteSaver` 是**框架自身的 thread 状态�
 
 ## 7. 维护清单(本文档应当何时更新)
 
-| 你改了什么                                                               | 检查本文档哪几节                                                                                                    |
-| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| 新增/删除 HTTP 路由                                                      | §2 API 一览 + §3 对应小节 + §1.1 分层图                                                                             |
-| 改 `runAgentStream` 主循环                                               | §3.2.2 ReAct 主循环细节 + §4.2 AG-UI 事件时序                                                                       |
-| 改 `postChatStream` / LLM 调用                                           | §3.2.2 + §4.3 Token 链路 + §5.2                                                                                     |
-| 改 prompts/ 目录(新版本、新 section)                                     | §4.1 messages 拼接顺序 + §1.2 模块职责                                                                              |
-| 改 tools.ts(新工具、改 schema)                                           | §1.2 模块职责 + §3.2.2 ReAct 工具调用部分                                                                           |
-| 改 abort / 中断行为                                                      | §3.3 中断处理 + §5.5 + §6                                                                                           |
-| 改 chat_sessions / chat_messages schema                                  | §3.4 / §3.5 + §1.2 + §6 局限对照                                                                                    |
-| 落地某个规划 Task                                                        | §6 局限表标记移除 + 必要时新增决策小节到 §5                                                                         |
-| 引入新模块(eval/、mcp/、skills/、agents/)                                | §1.1 分层图 + §1.2 职责表                                                                                           |
-| 改 sanitize.ts 规则库 / 检测策略                                         | §1.2 模块职责 + §3.2 时序图入口节点 + §5.6 决策 + §6 局限表注入检测条目                                             |
-| 改 tools.ts(增删工具 / 改 schema)                                        | §1.2 模块职责 + §3.6 工具一览;若 web_search 流程变化同步 §4.4                                                       |
-| 改 webSearchCache.ts(TTL、key 算法等)                                    | §1.2 模块职责 + §4.4 缓存层路径                                                                                     |
-| 改 langgraph-agent.ts / langgraphToAgUi.ts(整合-1 后)                    | §1.2 模块表 Agent 主线 + §5.8 LangGraph 切换决策;若新事件类型同步 §4.2                                              |
-| 改 runManager.ts / runRepo.ts(整合-2 核心)                               | §1.2 模块表 Run 管理器 / Run 仓库 + §5.7 Run-as-Resource 决策 + §6 局限表续订 / cancel 条目                         |
-| 改 redis/pool.ts / redis/runEventStore.ts(Task 5.4)                      | §1.1 分层图 + §1.2 Redis 热层行 + §5.10 决策 + `note-06-redis-hot-layer.md`                                         |
-| 改 db/pool.ts / 迁移 SQL / 数据库驱动(PostgreSQL)                        | §1.1 分层图 + §1.2 模块表 + §5.7/§5.8 Checkpointer + §6 局限表 + `note-07-postgresql-迁移.md`                       |
-| 改 archived_run_events schema                                            | DB migration 006 + §1.2 + §5.10 不变量                                                                              |
-| 改 agent_runs / archived_run_events schema                               | DB migration 003/006 + §1.2 + §6                                                                                    |
-| 加 / 改 /runs/\* HTTP 路由                                               | §2 API 一览                                                                                                         |
-| 改 ag-ui.ts 的 Source 类型(union 分支)                                   | §1.2 AG-UI 协议行 + §4.4 sources 路径                                                                               |
-| 改导航地图链路(amapRoute.ts / RouteMapView.tsx / MAP_ROUTE / 全方式补全) | §1.2 高德路线解析 / RouteMapView 行 + §4.2 事件时序(MAP_ROUTE) + §4.5 导航地图渲染链路 + `note-05-AG-UI协议文档.md` |
+| 你改了什么                                                                   | 检查本文档哪几节                                                                                                     |
+| ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| 新增/删除 HTTP 路由                                                          | §2 API 一览 + §3 对应小节 + §1.1 分层图                                                                              |
+| 改 `runAgentStream` 主循环                                                   | §3.2.2 ReAct 主循环细节 + §4.2 AG-UI 事件时序                                                                        |
+| 改 `postChatStream` / LLM 调用                                               | §3.2.2 + §4.3 Token 链路 + §5.2                                                                                      |
+| 改 prompts/ 目录(新版本、新 section)                                         | §4.1 messages 拼接顺序 + §1.2 模块职责                                                                               |
+| 改 tools.ts(新工具、改 schema)                                               | §1.2 模块职责 + §3.2.2 ReAct 工具调用部分                                                                            |
+| 改 abort / 中断行为                                                          | §3.3 中断处理 + §5.5 + §6                                                                                            |
+| 改 chat_sessions / chat_messages schema                                      | §3.4 / §3.5 + §1.2 + §6 局限对照                                                                                     |
+| 落地某个规划 Task                                                            | §6 局限表标记移除 + 必要时新增决策小节到 §5                                                                          |
+| 引入新模块(eval/、mcp/、skills/、agents/)                                    | §1.1 分层图 + §1.2 职责表                                                                                            |
+| 改 sanitize.ts 规则库 / 检测策略                                             | §1.2 模块职责 + §3.2 时序图入口节点 + §5.6 决策 + §6 局限表注入检测条目                                              |
+| 改 tools.ts(增删工具 / 改 schema)                                            | §1.2 模块职责 + §3.6 工具一览;若 web_search 流程变化同步 §4.4                                                        |
+| 改 webSearchCache.ts(TTL、key 算法等)                                        | §1.2 模块职责 + §4.4 缓存层路径                                                                                      |
+| 改 langgraph-agent.ts / langgraphToAgUi.ts(整合-1 后)                        | §1.2 模块表 Agent 主线 + §5.8 LangGraph 切换决策;若新事件类型同步 §4.2                                               |
+| 改 runManager.ts / runRepo.ts(整合-2 核心)                                   | §1.2 模块表 Run 管理器 / Run 仓库 + §5.7 Run-as-Resource 决策 + §6 局限表续订 / cancel 条目                          |
+| 改 redis/pool.ts / redis/runEventStore.ts(Task 5.4)                          | §1.1 分层图 + §1.2 Redis 热层行 + §5.10 决策 + `note-06-redis-hot-layer.md`                                          |
+| 改 db/pool.ts / 迁移 SQL / 数据库驱动(PostgreSQL)                            | §1.1 分层图 + §1.2 模块表 + §5.7/§5.8 Checkpointer + §6 局限表 + `note-07-postgresql-迁移.md`                        |
+| 改 archived_run_events schema                                                | DB migration 006 + §1.2 + §5.10 不变量                                                                               |
+| 改 agent_runs / archived_run_events schema                                   | DB migration 003/006 + §1.2 + §6                                                                                     |
+| 加 / 改 /runs/\* HTTP 路由                                                   | §2 API 一览                                                                                                          |
+| 改 ag-ui.ts 的 Source 类型(union 分支)                                       | §1.2 AG-UI 协议行 + §4.4 sources 路径                                                                                |
+| 改导航地图链路(planRouteTool.ts / RouteMapView.tsx / MAP_ROUTE / 三要素槽位) | §1.2 plan_route 行 / RouteMapView 行 + §4.2 事件时序(MAP_ROUTE) + §4.5 导航地图渲染链路 + `note-05-AG-UI协议文档.md` |
 
 **维护铁律**:任何 PR 涉及上述变更,**必须在 PR 描述里勾选已更新本文档的章节**。Claude Code 接手开发时,提交前应回到本文档自检。
 
