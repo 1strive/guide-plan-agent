@@ -4,7 +4,6 @@ import { MessageBubble } from "./MessageBubble";
 import { WelcomeBanner } from "./WelcomeBanner";
 import { ScrollToBottom } from "./ScrollToBottom";
 import { IconCompass } from "../components/Icons";
-import { log } from "console";
 
 /** 距底部多少 px 以内视为「在底部附近」，自动滚动才生效 */
 const AUTO_SCROLL_THRESHOLD = 30;

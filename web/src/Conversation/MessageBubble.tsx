@@ -65,20 +65,15 @@ const rendererComponents: Array<{
         </div>
       ) : null,
   },
-  // ── 导航地图 ──
+  // ── 导航地图（同一消息的多种出行方式聚合为单张地图 + Tab 切换） ──
   {
     key: "mapRoutes",
-    render: ({ msg }) => {
-      console.log({ msg }, "ja mapRoutes");
-
-      return msg.mapRoutes && msg.mapRoutes.length > 0 ? (
-        <div className="flex flex-col gap-2 mt-2">
-          {msg.mapRoutes.map((r, j) => (
-            <RouteMapView key={j} route={r} />
-          ))}
+    render: ({ msg }) =>
+      msg.mapRoutes && msg.mapRoutes.length > 0 ? (
+        <div className="mt-2">
+          <RouteMapView routes={msg.mapRoutes} />
         </div>
-      ) : null;
-    },
+      ) : null,
   },
   // ── 中断交互卡片 ──
   {
@@ -130,8 +125,6 @@ function AssistantBubble({
   prevUserContent?: string;
 }) {
   const ctx: RendererContext = { msg, prevUserContent };
-
-  console.log({ msg, ctx }, "ja assistant");
 
   return (
     <div className="flex gap-4 items-start mb-8 group">

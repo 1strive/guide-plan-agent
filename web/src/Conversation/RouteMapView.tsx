@@ -26,6 +26,14 @@ const MODE_COLOR: Record<MapRouteData["mode"], string> = {
   transit: "#7c3aed",
 };
 
+/** 前端始终展示的交通方式顺序（默认选中第一个＝驾车） */
+const ALL_MODES: MapRouteData["mode"][] = [
+  "driving",
+  "transit",
+  "walking",
+  "bicycling",
+];
+
 /**
  * 路线地图组件（含交通工具切换）
  *
@@ -34,15 +42,35 @@ const MODE_COLOR: Record<MapRouteData["mode"], string> = {
  *   插件会「自动把规划出的曲线导航线绘制到地图上」（官方教程 §2），无需手动画折线
  * - 注意：官方方法名是 search()，不是 plan()
  * - 同一消息内多种出行方式 → 单张地图 + Tab 切换（切 Tab → 重建地图重新 search）
+ *
+ * 全交通方式补全（根治「只渲染公交」）：
+ * - 后端无论 LLM 调了哪一种路径工具，只需下发含起终点的 MAP_ROUTE 即可
+ * - 前端据同一对起终点，对驾车/公交/步行/骑行「各自」用对应插件规划 → 恒定展示全部 Tab
+ * - 这样既覆盖「从A到B怎么走」，也覆盖「行程规划中的路线段」，且不依赖 LLM 多次调工具
  */
-export function RouteMapView({ route }: { route: MapRouteData }) {
-  const allRoutes = useAllRoutes(route);
-  return <MapCard routes={allRoutes} />;
+export function RouteMapView({ routes }: { routes: MapRouteData[] }) {
+  if (!routes || routes.length === 0) return null;
+  // 取任一含起终点的后端路线作为基准（起终点坐标 + 名称 + 城市）
+  const base = routes.find((r) => r.origin && r.destination) ?? routes[0];
+  if (!base?.origin || !base?.destination) return <MapCard routes={routes} />;
+  // 以基准起终点补全全部交通方式：已有后端数据的复用，其余用起终点占位（前端插件现算）
+  const expanded: MapRouteData[] = ALL_MODES.map((mode) => {
+    const existing = routes.find((r) => r.mode === mode);
+    if (existing) return existing;
+    return {
+      mode,
+      origin: base.origin,
+      destination: base.destination,
+      originName: base.originName,
+      destinationName: base.destinationName,
+      city: base.city,
+      path: base.path,
+    };
+  });
+  return <MapCard routes={expanded} />;
 }
 
 function MapCard({ routes }: { routes: MapRouteData[] }) {
-  console.log({ routes }, "ja");
-
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<
     "loading" | "ready" | "error" | "no-key" | "no-route"
@@ -54,6 +82,17 @@ function MapCard({ routes }: { routes: MapRouteData[] }) {
     durationSeconds?: number;
   }>({});
   const activeRoute = routes[activeIdx] ?? routes[0];
+  // 用内容 key 稳定 useEffect 依赖：routes 每次流式投射都是新数组引用，
+  // 若直接依赖 routes 会导致流式过程中地图反复销毁重建（偶现不渲染）
+  const routesKey = useMemo(
+    () =>
+      routes
+        .map(
+          (r) => `${r.mode}:${r.origin?.join(",")}>${r.destination?.join(",")}`,
+        )
+        .join("|"),
+    [routes],
+  );
 
   useEffect(() => {
     if (!AMAP_KEY) {
@@ -164,7 +203,8 @@ function MapCard({ routes }: { routes: MapRouteData[] }) {
       }
       map = null;
     };
-  }, [routes, activeIdx, activeRoute]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routesKey, activeIdx]);
 
   useEffect(() => setPlanInfo({}), [activeIdx]);
 
@@ -292,32 +332,6 @@ function drawFallback(AMap: any, map: any, r: MapRouteData) {
       lineCap: "round",
     }),
   );
-}
-
-function useAllRoutes(current: MapRouteData): MapRouteData[] {
-  return useMemo(() => {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { useChatStore } = require("../store/chatStore") as {
-        useChatStore: () => {
-          messages: Array<{ role?: string; mapRoutes?: MapRouteData[] }>;
-        };
-      };
-      const store = useChatStore();
-      const last = [...store.messages]
-        .reverse()
-        .find(
-          (m) =>
-            m.role === "assistant" &&
-            Array.isArray(m.mapRoutes) &&
-            m.mapRoutes!.length > 0,
-        );
-      if (last?.mapRoutes && last.mapRoutes.length > 0) return last.mapRoutes;
-    } catch {
-      /* 降级 */
-    }
-    return [current];
-  }, [current]);
 }
 
 function formatDistance(meters?: number): string {

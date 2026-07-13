@@ -182,6 +182,8 @@ const protocolHandlers: ProtocolHandlerEntry[] = [
                 durationSeconds: data.durationSeconds,
                 originName: data.originName,
                 destinationName: data.destinationName,
+                // 透传 city：前端公交（AMap.Transfer）规划构造必填，缺失会退化
+                city: data.city,
             })
         },
     },
