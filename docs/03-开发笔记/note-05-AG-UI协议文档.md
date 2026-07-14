@@ -118,6 +118,8 @@ Run 结束(正常完成 / 反问中断 / 取消后)。**这是 SSE 流的最后�
 | interrupts[0].message          | 反问文本(展示给用户)  |
 | interrupts[0].metadata.options | 选项列表(渲染为按钮)  |
 
+> 前端 `InterruptCard` 渲染：每个选项渲染为可点击 Chip，点击即作为答案走 resume。**当选项命中 `其他/其它/other` 时不直接提交**，而是展开一个自由输入框（输入框 + 发送按钮，Enter/点击提交），把用户自由输入作为反问答案（复用 `handleOptionClick(customText)` 同一条 resume 通道）。
+
 ---
 
 #### RUN_ERROR
@@ -360,7 +362,7 @@ Run 执行出错(LLM 超时 / 工具失败 / 内部异常)。通常紧跟 RUN_FI
 
 **前端动作**:在 `AssistantBubble` 内渲染 `RouteMapView`（AMap JS API），**按确定的单一 mode** 用名称形式 `search([{keyword,city}...])` 让高德内部地理编码并自动绘线 + 起终点 Marker（支持多目的地/环线；公交仅取首/末两点），footer 显示出行方式/距离/耗时；未配置 `VITE_AMAP_JS_KEY` 时渲染占位提示。不再强制展开全部 4 个 Tab。
 
-> 对应后端：`src/agent/planRouteTool.ts`（三要素槽位填充 + interrupt 反问） + `src/agent/langgraphToAgUi.ts`（拦截 plan_route 输出并发 MAP_ROUTE）。
+> 对应后端：`src/agent/planRouteTool.ts`（三要素纯工具，不再内置 interrupt；缺项反问统一由 `ask_user` 在调用前完成） + `src/agent/langgraphToAgUi.ts`（拦截 plan_route 输出并发 MAP_ROUTE）。
 > 前端：`web/src/Conversation/RouteMapView.tsx`。
 
 ---

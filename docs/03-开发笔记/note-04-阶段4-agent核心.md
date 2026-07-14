@@ -668,6 +668,116 @@ src/skills/
 
 ---
 
+## 路线重构:反问统一走 ask_user + 反 narration 兜底
+
+> 背景:目标场景「`西北大环线` → ask_user 反问 → 答『成都』 → 模型只回『好的,我先来规划路线』就结束、地图不渲染」。
+> 根因:ask_user 反问 resume 后,模型那一轮输出纯文本且无 `tool_calls`,`createAgent` 的 ReAct 图判为最终回答直接 END,`plan_route` 从未调用。
+> 设计定调:`ask_user` 保持不改作为唯一反问通道;`plan_route` 删内部反问变纯工具;新增 afterModel 兜底确保反问后必调工具。
+
+### R.1 改 `src/agent/planRouteTool.ts`(删内部 interrupt → 纯工具)
+
+删除函数体内 origin/mode 的 `interrupt()` 槽位反问与 `LABEL_TO_MODE` 映射、移除 `import { interrupt }`。`plan_route` 现为纯工具：接收齐备三要素 → `return JSON.stringify(...)`。schema 中 `origin` 加 `.min(1)` 必填非空、`mode` 去 `.optional()` 变必填。
+
+```ts
+// 三要素由调用方（模型）保证齐备：直接输出结构化路线意图，交给 adapter 转 MAP_ROUTE
+return JSON.stringify({
+  origin: input.origin.trim(),
+  destinations: input.destinations,
+  mode: input.mode,
+  city: input.city,
+  isLoop: !!input.isLoop,
+});
+```
+
+关联八股:`04-工具调用.md §4 Human-in-the-Loop`（反问通道收敛为单一）、`§6 MCP 协议`。
+
+### R.2 改 `src/agent/prompts/v1_base.ts` + `v2_cot.ts`(反 narration)
+
+- `toolUsageRules` plan_route 段：「出发地/目的地/出行方式任一项未知时，先用 ask_user 反问补齐，不要给 plan_route 传空」。
+- `clarificationRules` 新增反 narration 规则：「决定调用工具时必须本轮直接发起调用，禁止只回『好的,我来规划路线』就结束；尤其在 ask_user 获得答复后应立即调对应工具」。
+- `v2_cot.ts` step 4：「未知项先用 ask_user 反问补齐再调 plan_route；决定调用就本轮发起，不只声明意图」。
+
+关联八股:`09-Prompt工程.md §1.3 基本结构`、`04-工具调用.md §4`。
+
+### R.3 改 `src/agent/langgraph-agent.ts`(afterModel 兜底中间件)
+
+新增 `forceToolCallMiddleware = createMiddleware({ name, afterModel: { hook, canJumpTo: ['model'] } })`，注入 `buildAgent` 的 `createAgent({ ..., middleware: [forceToolCallMiddleware] })`（run/resume 共用）。
+
+```ts
+// 触发：最后一条 AIMessage 无 tool_calls、有文本 且 倒数第二条是 name==='ask_user' 的 ToolMessage
+if (!isAIMessage(last)) return;
+if ((last.tool_calls?.length ?? 0) > 0) return;
+if (!isToolMessage(prev) || prev.name !== ASK_USER_TOOL_NAME) return;
+if (alreadyNudged) return; // NUDGE_MARKER 保证每 run 最多兜底 1 次
+return {
+  messages: [new HumanMessage(`...请直接调用合适的工具...${NUDGE_MARKER}`)],
+  jumpTo: "model" as const,
+};
+```
+
+设计边界:只在「刚从 ask_user resume 回来却只 narration」时触发（低误伤）；`NUDGE_MARKER` 写入注入的 HumanMessage，随 checkpoint 持久化，同一 run/thread 不重复兜底，防死循环。关联八股:`04-工具调用.md §4 Human-in-the-Loop`（**首次实践**：确定性保障反问后必调工具）。
+
+### R.4 附录:本次改动速查
+
+| 改动类型   | 路径                             | 改动一句话                                                                  |
+| ---------- | -------------------------------- | --------------------------------------------------------------------------- |
+| **改代码** | `src/agent/planRouteTool.ts`     | 删 origin/mode 内部 interrupt 与 LABEL_TO_MODE，变纯工具；origin/mode 必填  |
+|            | `src/agent/langgraph-agent.ts`   | 新增 forceToolCallMiddleware（afterModel + jumpTo model）并注入 createAgent |
+|            | `src/agent/prompts/v1_base.ts`   | plan_route 段改走 ask_user 补齐；新增反 narration 规则                      |
+|            | `src/agent/prompts/v2_cot.ts`    | cotInstruction step 4 改为 ask_user 补齐 + 本轮发起调用                     |
+| **改文档** | `docs/04-架构文档/agent-架构.md` | §1.2 模块职责 + §4.5 导航链路                                               |
+|            | `docs/03-开发笔记/note-05-*.md`  | plan_route 反问来源说明                                                     |
+
+### R.5 验证
+
+`npx tsc --noEmit` 通过；手动回归：`西北大环线` → ask_user 反问 → 答『成都』 → resume 后观察是否触发 plan_route → MAP_ROUTE 下发 → 地图渲染 → 会话正常结束。
+
+---
+
+## 路线重构追加：首轮 narration、自由输入、可地理编码目的地
+
+> 背景：R 节上线后又暴露三个问题。本节补齐修复（在 R 基础上迭代）。
+
+### F.1 首轮 narration：扩展 forceToolCallMiddleware(`langgraph-agent.ts`)
+
+原兜底只盖「ask_user resume 后只 narration」。新增首轮场景：模型首轮就回「这次我问您几个关键信息…」却不调 ask_user。触发条件改为「最后一条 AIMessage 无 tool_calls + 文本非空」且满足任一：
+
+```ts
+const afterAskUser = isToolMessage(prev) && prev.name === ASK_USER_TOOL_NAME;
+// NARRATION_INTENT_RE：未来/意图标记(让我/我先/这就/接下来/这次/先…)+动作动词(问/规划/查/推荐…)
+const looksLikeIntent =
+  text.trim().length <= 60 && NARRATION_INTENT_RE.test(text);
+if (!afterAskUser && !looksLikeIntent) return;
+```
+
+纠偏消息改为「二选一：缺信息调 ask_user / 信息足够调对应工具」。`name` 改 `forceToolCallOnNarration`，`NUDGE_MARKER` 改 `[[force_tool_call_nudge]]`，仍每 run 兜底 1 次。
+
+### F.2 修正误导 narration 的 few-shot(`v1_base.ts`)
+
+旧 few-shot 的 assistant 回复本身就是「我先问您几个问题 / 我先帮您查」这类声明，反向教会模型只 narration（因反问已改走 ask_user 工具，无法用文本对展示）。三条示例改为「直接发问 / 直接给结果」风格，不留延迟行动的口头声明。
+
+### F.3 目的地必须可地理编码(`planRouteTool.ts` + prompts)
+
+地图无路线的根因：模型把「西北大环线」等抽象路线名直接当 destination，高德名称检索 geocode 失败 → fallback 需 `path` 坐标（后端不下发）→ 不画线。修复：工具 `description`/`destinations.describe` + `toolUsageRules` + cot step 4 均强调 **origin/destinations 必须是高德能搜到的具体地点（城市/区县/景区/地标），命名路线要拆成有序的具体城市/景点**（如西北大环线→西宁、青海湖、茶卡盐湖…）。
+
+### F.4 「其他」自由输入框(`web/src/ChatInput/InterruptCard.tsx`)
+
+反问选项命中 `其他/其它/other` 时不直接提交，而是 `setFreeInput(true)` 展开一个输入框 + 发送按钮，Enter/点击提交，复用 `handleOptionClick(customText)` 走同一条 resume 通道。
+
+### F.5 本次改动速查
+
+| 类型   | 路径                                  | 一句话                                                         |
+| ------ | ------------------------------------- | -------------------------------------------------------------- |
+| 改代码 | `src/agent/langgraph-agent.ts`        | 兜底中间件扩展首轮 narration（NARRATION_INTENT_RE + 长度门控） |
+|        | `src/agent/planRouteTool.ts`          | description/describe 强制 destinations 为可地理编码具体地点    |
+|        | `src/agent/prompts/v1_base.ts`        | plan_route 段 + 反 narration 规则扩展首轮；重写误导的 few-shot |
+|        | `src/agent/prompts/v2_cot.ts`         | step 4 加入可地理编码目的地约束                                |
+| 改前端 | `web/src/ChatInput/InterruptCard.tsx` | 「其他」展开自由输入框                                         |
+
+验证：前后端 `npx tsc --noEmit` 均通过。
+
+---
+
 ## 附录：Task 4.3 + 4.4 代码改动速查
 
 | 改动类型   | 路径                                        | Task    | 改动一句话                                                   |

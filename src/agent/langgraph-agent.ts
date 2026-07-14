@@ -15,8 +15,9 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { createAgent } from 'langchain'
+import { createAgent, createMiddleware } from 'langchain'
 import { Command } from '@langchain/langgraph'
+import { HumanMessage, isAIMessage, isToolMessage, type BaseMessage } from '@langchain/core/messages'
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres'
 import { ChatOpenAI } from '@langchain/openai'
 import type { StructuredToolInterface } from '@langchain/core/tools'
@@ -82,6 +83,74 @@ export function buildChatModel(config: AppConfig): ChatOpenAI {
 }
 
 /**
+ * 反 narration 兜底中间件（afterModel）—「只声明不行动」时强制模型补上工具调用
+ *
+ * 规划:docs/开发规划.md（反问统一走 ask_user 重构 — afterModel 兜底）
+ * 八股:04-工具调用.md §4 Human-in-the-Loop（首次实践：确定性保障「该反问就反问、该调工具就调工具」）
+ *
+ * 背景:弱模型有两种典型「只声明不行动」故障，都会让 ReAct 图误判为最终回答直接 END：
+ *   A. 反问 resume 后只回「好的，我来规划路线」而不带 tool_calls → plan_route 从未调用、地图不渲染
+ *   B. 首轮就只回「这次我问您几个关键信息…」这类声明，却没真正调用 ask_user → 反问丢失
+ * 本中间件在 afterModel 阶段检测这两类情形，注入一条纠偏消息并 jumpTo 'model'，
+ * 强制模型要么调用 ask_user 反问、要么直接调用对应工具（如 plan_route）。
+ *
+ * 触发条件（精确、低误伤）:
+ * - 最后一条是 AIMessage 且无 tool_calls、content 非空（纯文本回复）
+ * - 且满足下列任一：
+ *     A) 倒数第二条是 name==='ask_user' 的 ToolMessage（刚从反问 resume 回来）
+ *     B) 文本较短（≤60 字）且命中「未来意图 + 动作动词」的 narration 句式（首轮声明不行动）
+ * - 本 run 尚未兜底过（history 里没有 NUDGE_MARKER），最多兜底 1 次防死循环
+ */
+const ASK_USER_TOOL_NAME = 'ask_user'
+const NUDGE_MARKER = '[[force_tool_call_nudge]]'
+
+// 「只声明将要做某事、却没实际调用工具」的 narration 句式：
+// 未来/意图标记（让我/我先/这就/接下来/这次/先…）+ 动作动词（问/规划/查/推荐/了解…）。
+// 仅在文本较短时启用，避免误伤含实质内容的正常回答。
+const NARRATION_INTENT_RE =
+  /(让我|我来|我先|我这就|这就|马上|接下来|稍后|这次|先)[^。！!?？]{0,20}(问|询问|了解|确认|查询|查找|搜索|检索|规划|推荐|获取|安排)/
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const forceToolCallMiddleware: any = createMiddleware({
+  name: 'forceToolCallOnNarration',
+  afterModel: {
+    hook: (state: { messages: BaseMessage[] }) => {
+      const messages = state.messages ?? []
+      if (messages.length < 2) return
+      const last = messages[messages.length - 1]
+      const prev = messages[messages.length - 2]
+      if (!last || !prev) return
+      // 1. 最后一条 AIMessage 且无 tool_calls、有文本（纯 narration）
+      if (!isAIMessage(last)) return
+      if ((last.tool_calls?.length ?? 0) > 0) return
+      const text = typeof last.content === 'string' ? last.content : ''
+      if (!text.trim()) return
+      // 2. 命中任一 narration 故障：A) 刚从 ask_user resume 回来；B) 首轮意图句式
+      const afterAskUser = isToolMessage(prev) && prev.name === ASK_USER_TOOL_NAME
+      const looksLikeIntent = text.trim().length <= 60 && NARRATION_INTENT_RE.test(text)
+      if (!afterAskUser && !looksLikeIntent) return
+      // 3. 本 run 只兜底一次：history 里已注入过 marker 则放行（防死循环）
+      const alreadyNudged = messages.some(
+        (m) => typeof m.content === 'string' && m.content.includes(NUDGE_MARKER)
+      )
+      if (alreadyNudged) return
+      // 注入纠偏消息 + 强制再跑一轮模型（jumpTo 'model'）
+      return {
+        messages: [
+          new HumanMessage(
+            `你上一句只是声明了将要做的事，却没有实际调用任何工具。请立即行动，二选一：` +
+            `若还缺少关键信息（如出发地/目的地/出行方式），调用 ask_user 工具向用户提问；` +
+            `若信息已足够，直接调用合适的工具（例如路线场景调用 plan_route）完成请求，不要只用文字说明。${NUDGE_MARKER}`
+          )
+        ],
+        jumpTo: 'model' as const
+      }
+    },
+    canJumpTo: ['model'] as const
+  }
+})
+
+/**
  * 构建 Agent 实例（run 与 resume 共用相同图结构 + checkpointer）
  * Task 4.5:askUserTool 注入，使 Agent 可调用 interrupt() 暂停图
  */
@@ -92,13 +161,15 @@ function buildAgent(
 ) {
   const model = buildChatModel(config)
   // Task 4.5:ask_user 工具注入到工具列表末尾
-  // 路线改造:plan_route 工具同样注入，作为路线三要素槽位填充 + interrupt 反问入口
+  // 路线改造:plan_route 工具同样注入，作为路线三要素渲染入口（缺项反问统一由 ask_user 负责）
+  // 反 narration 兜底:forceToolCallMiddleware 在 afterModel 阶段保障「反问后必调工具」
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return createAgent({
     model,
     tools: [...tools, askUserTool, planRouteTool] as any,
     systemPrompt,
-    checkpointer
+    checkpointer,
+    middleware: [forceToolCallMiddleware]
   } as any)
 }
 
